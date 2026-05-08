@@ -1,0 +1,49 @@
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# Secrets / credentials
+.env
+.env.*
+.clasprc.json
+*.pem
+*.key
+
+# Logs
+*.log
+logs/
+
+# OMC orchestration state (local only)
+.omc/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+build/
+dist/
+*.spec
+*.egg-info/
+
+# Generated EXE / build artifacts
+exe/dist/
+exe/build/
+*.exe
+
+# Temporary files
+_design_pkg/
+tmp/
+*.tmp

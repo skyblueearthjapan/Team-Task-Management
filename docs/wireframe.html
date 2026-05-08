@@ -1,0 +1,1112 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280">
+<title>機械設計技術部 タスク管理</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&family=Noto+Serif+JP:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* Paper / warm-neutral surfaces */
+    --bg-base:   #f1ebe0;   /* deeper paper */
+    --bg-panel:  #fbf8f1;   /* card */
+    --bg-row:    #f6f1e6;   /* alt row */
+    --bg-elev:   #ede5d4;   /* header strips */
+    --bg-soft:   #f7f2e6;
+
+    --line:      #e1d8c5;
+    --line-2:    #cfc5ae;
+    --line-3:    #b8ad94;
+
+    --txt-1:     #2a2520;
+    --txt-2:     #6b6157;
+    --txt-3:     #9a9080;
+    --txt-4:     #c2b9a8;
+
+    /* Functional accent — warm clay (distinct from any specific brand) */
+    --accent:    #b85c3a;
+    --accent-2:  #a04d2e;
+    --accent-soft: rgba(184,92,58,0.10);
+
+    --ok:        #5d7355;
+    --ok-soft:   rgba(93,115,85,0.10);
+    --warn:      #b8862a;
+    --warn-soft: rgba(184,134,42,0.10);
+    --err:       #a13b2a;
+    --err-soft:  rgba(161,59,42,0.08);
+  }
+
+  html, body {
+    background: var(--bg-base);
+    color: var(--txt-1);
+    font-family: "Inter", "Noto Sans JP", system-ui, -apple-system, sans-serif;
+    font-feature-settings: "palt", "ss01";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Subtle paper grain */
+  body::before {
+    content: "";
+    position: fixed; inset: 0;
+    pointer-events: none;
+    background-image:
+      radial-gradient(rgba(80,60,30,0.025) 1px, transparent 1px),
+      radial-gradient(rgba(80,60,30,0.020) 1px, transparent 1px);
+    background-size: 3px 3px, 7px 7px;
+    background-position: 0 0, 1px 2px;
+    z-index: 0;
+    opacity: 0.6;
+    mix-blend-mode: multiply;
+  }
+  body > * { position: relative; z-index: 1; }
+
+  .serif { font-family: "Noto Serif JP", "Source Serif 4", Georgia, serif; font-feature-settings: "palt"; letter-spacing: -0.005em; }
+  .mono  { font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; font-feature-settings: "tnum"; }
+  .tnum  { font-feature-settings: "tnum", "palt"; }
+
+  .panel       { background: var(--bg-panel); border: 1px solid var(--line); }
+  .shadow-soft { box-shadow:
+                  0 1px 0 rgba(60, 40, 20, 0.04),
+                  0 1px 2px rgba(60, 40, 20, 0.04),
+                  0 8px 20px rgba(60, 40, 20, 0.04);
+  }
+  .shadow-deep { box-shadow:
+                  0 1px 0 rgba(60, 40, 20, 0.04),
+                  0 12px 32px rgba(60, 40, 20, 0.10),
+                  0 32px 64px rgba(60, 40, 20, 0.08);
+  }
+
+  /* ── window chrome (desktop-app feel) ── */
+  .window {
+    background: var(--bg-panel);
+    border: 1px solid var(--line-2);
+    border-radius: 14px;
+    box-shadow:
+      0 1px 0 rgba(255,255,255,0.6) inset,
+      0 1px 2px rgba(60,40,20,0.06),
+      0 24px 60px rgba(60,40,20,0.10);
+    overflow: hidden;
+  }
+  .titlebar {
+    height: 38px;
+    background: linear-gradient(180deg, #ede5d2 0%, #e3d8be 100%);
+    border-bottom: 1px solid var(--line-2);
+    display: flex; align-items: center; padding: 0 14px; gap: 10px;
+  }
+  .traffic { width: 12px; height: 12px; border-radius: 999px; box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.15); }
+  .traffic.r { background: #de6e60; }
+  .traffic.y { background: #e0ad48; }
+  .traffic.g { background: #5da55a; }
+  .titlebar .ttl { font-size: 12px; color: var(--txt-2); margin-left: auto; margin-right: auto; letter-spacing: 0.02em; }
+
+  /* ── sidebar nav ── */
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--txt-2);
+    cursor: pointer;
+  }
+  .nav-item:hover { background: rgba(184,92,58,0.05); color: var(--txt-1); }
+  .nav-item.active {
+    background: var(--bg-panel);
+    color: var(--txt-1);
+    font-weight: 600;
+    box-shadow: 0 1px 2px rgba(60,40,20,0.06), inset 0 0 0 1px var(--line);
+  }
+  .nav-section { font-size: 10.5px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--txt-3); padding: 12px 12px 6px; }
+
+  /* ── Gantt ── */
+  .gantt-wrap   { position: relative; }
+  .gantt-scroll {
+    overflow-x: auto; overflow-y: hidden;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--bg-panel);
+  }
+  .gantt-table  {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    min-width: max-content;
+  }
+  .gantt-staff-col { position: sticky; left: 0; z-index: 5; background: var(--bg-panel); border-right: 1px solid var(--line-2); }
+  .gantt-staff-col .staff-cell {
+    height: 56px; display: flex; align-items: center; padding: 0 16px;
+    border-bottom: 1px solid var(--line);
+    font-size: 13.5px; font-weight: 500;
+    gap: 10px;
+  }
+  .gantt-staff-col .staff-cell .avatar {
+    width: 28px; height: 28px; border-radius: 999px;
+    display: grid; place-items: center;
+    font-size: 11px; font-weight: 600;
+    color: #fff;
+    flex-shrink: 0;
+  }
+  .gantt-staff-col .staff-cell.header {
+    height: 64px; background: var(--bg-elev); font-weight: 600; font-size: 11px;
+    color: var(--txt-3); letter-spacing: 0.12em; text-transform: uppercase;
+    border-bottom: 1px solid var(--line-2);
+  }
+  .gantt-staff-col .staff-cell .email { font-size: 10.5px; color: var(--txt-3); font-weight: 400; }
+  .gantt-staff-col .staff-cell .name { display:flex; flex-direction: column; line-height: 1.25; }
+
+  .gantt-days   {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 64px;
+    grid-template-rows: 32px 32px repeat(6, 56px);
+  }
+  .gantt-month  {
+    grid-row: 1;
+    background: var(--bg-elev);
+    border-bottom: 1px solid var(--line);
+    font-size: 11px; font-weight: 600; color: var(--txt-2);
+    letter-spacing: 0.06em;
+    display: flex; align-items: center; justify-content: center;
+    border-right: 1px solid var(--line);
+    font-family: "Noto Serif JP", serif;
+  }
+  .gantt-day-head {
+    grid-row: 2;
+    background: var(--bg-elev);
+    border-bottom: 1px solid var(--line-2);
+    border-right: 1px solid var(--line);
+    font-size: 10.5px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.15;
+    color: var(--txt-2);
+  }
+  .gantt-day-head .dnum { font-weight: 600; color: var(--txt-1); font-size: 12.5px; font-family: "Inter", sans-serif; font-feature-settings: "tnum"; }
+  .gantt-day-head.weekend { background: #e8e0cc; }
+  .gantt-day-head.sat .dow { color: #4a5b6e; }
+  .gantt-day-head.sun .dow { color: var(--err); }
+  .gantt-day-head.today {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-bottom: 2px solid var(--accent);
+  }
+  .gantt-day-head.today .dnum { color: var(--accent); }
+
+  .gantt-cell {
+    border-right: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    position: relative;
+  }
+  .gantt-cell.weekend { background: #f0e9d8; }
+  .gantt-cell.today   { background: rgba(184,92,58,0.04); }
+
+  .gantt-bar {
+    position: absolute;
+    top: 8px; bottom: 8px;
+    border-radius: 6px;
+    padding: 5px 9px;
+    font-size: 11.5px;
+    line-height: 1.25;
+    color: #fbf8f1;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    cursor: grab;
+    font-weight: 500;
+    box-shadow:
+      0 1px 0 rgba(255,255,255,0.18) inset,
+      0 1px 2px rgba(60,40,20,0.18);
+    letter-spacing: 0.005em;
+  }
+
+  /* Muted, refined palette — no bright gradients */
+  .bar-clay    { background: #b85c3a; }
+  .bar-plum    { background: #6b4060; }
+  .bar-ochre   { background: #c08a2a; color: #2a2520; }
+  .bar-burgundy{ background: #8e2f30; }
+  .bar-moss    { background: #5d7355; }
+  .bar-indigo  { background: #3d4f6e; }
+  .bar-stone   { background: #6e6357; }
+
+  /* Legend swatches */
+  .swatch { width: 14px; height: 10px; border-radius: 3px; display: inline-block; }
+
+  /* Badges */
+  .badge { font-size: 10.5px; padding: 3px 9px; border-radius: 999px; border: 1px solid; background: #fff; font-weight: 500; }
+  .badge-pending { color: var(--warn); border-color: rgba(184,134,42,.45); background: var(--warn-soft); }
+  .badge-drafted { color: var(--accent); border-color: rgba(184,92,58,.4); background: var(--accent-soft); }
+  .badge-sent    { color: var(--ok); border-color: rgba(93,115,85,.45); background: var(--ok-soft); }
+  .badge-failed  { color: var(--err); border-color: rgba(161,59,42,.45); background: var(--err-soft); }
+  .badge-idle    { color: var(--txt-3); border-color: var(--line-2); background: var(--bg-soft); }
+
+  /* Pills (date chips) */
+  .pill { font-size: 11px; padding: 2px 8px; border-radius: 4px; background: var(--bg-elev); color: var(--txt-2); font-feature-settings: "tnum"; font-family: "JetBrains Mono", ui-monospace, monospace; }
+  .pill-accent { color: var(--accent); background: var(--accent-soft); }
+
+  /* Buttons */
+  .nav-btn { background: var(--bg-panel); border: 1px solid var(--line); padding: 7px 12px; border-radius: 8px; font-size: 12.5px; color: var(--txt-1); font-weight: 500; }
+  .nav-btn:hover { border-color: var(--line-3); background: var(--bg-soft); }
+  .btn-primary  { background: var(--txt-1); color: var(--bg-panel); font-weight: 500; padding: 9px 18px; border-radius: 8px; border: 1px solid var(--txt-1); font-size: 13px; letter-spacing: 0.005em; }
+  .btn-primary:hover { background: #1a1612; }
+  .btn-secondary { background: var(--bg-panel); border: 1px solid var(--line-2); padding: 9px 18px; border-radius: 8px; color: var(--txt-1); font-weight: 500; font-size: 13px; }
+  .btn-secondary:hover { border-color: var(--line-3); background: var(--bg-soft); }
+  .btn-accent  { background: var(--accent); color: #fff; font-weight: 500; padding: 9px 18px; border-radius: 8px; border: 1px solid var(--accent); font-size: 13px; }
+  .btn-accent:hover { background: var(--accent-2); }
+
+  /* Status dot heartbeat */
+  .heartbeat { display: inline-block; width: 7px; height: 7px; border-radius: 999px; background: var(--ok); box-shadow: 0 0 0 0 rgba(93,115,85,0.6); animation: pulse 2.4s infinite; }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(93,115,85,0.55); }
+    70%  { box-shadow: 0 0 0 6px rgba(93,115,85,0); }
+    100% { box-shadow: 0 0 0 0 rgba(93,115,85,0); }
+  }
+
+  /* Avatars */
+  .av-1 { background: #b85c3a; }
+  .av-2 { background: #6b4060; }
+  .av-3 { background: #c08a2a; color: #2a2520; }
+  .av-4 { background: #5d7355; }
+  .av-5 { background: #3d4f6e; }
+  .av-6 { background: #8e2f30; }
+
+  /* Scrollbar */
+  .gantt-scroll::-webkit-scrollbar { height: 10px; }
+  .gantt-scroll::-webkit-scrollbar-thumb { background: var(--line-3); border-radius: 6px; border: 2px solid var(--bg-panel); background-clip: padding-box; }
+  .gantt-scroll::-webkit-scrollbar-track { background: var(--bg-soft); }
+
+  /* Section titles */
+  .section-eyebrow { font-size: 10.5px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; color: var(--txt-3); }
+  .section-title { font-family: "Noto Serif JP", serif; font-weight: 600; font-size: 22px; letter-spacing: -0.01em; color: var(--txt-1); }
+  .section-sub { font-size: 13px; color: var(--txt-2); }
+
+  /* Search */
+  .search {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 7px 12px;
+    font-size: 13px;
+    color: var(--txt-3);
+    width: 320px;
+  }
+  .kbd {
+    margin-left: auto;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--bg-panel);
+    border: 1px solid var(--line);
+    color: var(--txt-3);
+  }
+
+  /* Report card list rows */
+  .row-line {
+    display: grid;
+    grid-template-columns: 78px 1fr 14px;
+    gap: 10px;
+    align-items: center;
+    font-size: 12.5px;
+    padding: 4px 0;
+  }
+  .row-add { color: var(--txt-3); cursor: pointer; }
+  .row-add:hover { color: var(--accent); }
+
+  /* Ornament rule */
+  .rule {
+    display: flex; align-items: center; gap: 12px;
+    color: var(--txt-3); font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
+    margin: 0 0 12px;
+  }
+  .rule::before, .rule::after {
+    content: ""; flex: 1; height: 1px; background: var(--line-2);
+  }
+
+  /* Subtle column hover guide for Gantt rows */
+  .row-band:nth-child(odd)  { background: transparent; }
+  .row-band:nth-child(even) { background: var(--bg-row); }
+</style>
+</head>
+<body class="min-h-screen">
+
+<!-- ═══════════════ DESKTOP WINDOW SHELL ═══════════════ -->
+<div class="px-6 pt-6 pb-10">
+  <div class="window">
+
+    <!-- titlebar -->
+    <div class="titlebar">
+      <div class="flex items-center gap-2">
+        <span class="traffic r"></span>
+        <span class="traffic y"></span>
+        <span class="traffic g"></span>
+      </div>
+      <div class="ttl serif">機械設計技術部 — タスク管理</div>
+      <div class="flex items-center gap-2 text-xs" style="color:var(--txt-3)">
+        <span class="heartbeat"></span>
+        <span>EXEエージェント稼働中 <span class="mono" style="color:var(--txt-3); font-size:10px">· 12秒前</span></span>
+      </div>
+    </div>
+
+    <!-- BODY: sidebar + main -->
+    <div class="grid" style="grid-template-columns: 232px 1fr;">
+
+      <!-- ═══════════════ SIDEBAR ═══════════════ -->
+      <aside style="background: var(--bg-soft); border-right: 1px solid var(--line); min-height: 1480px;">
+        <div class="px-4 pt-5 pb-3 flex items-center gap-3">
+          <div class="w-9 h-9 rounded-md grid place-items-center serif font-bold" style="background:var(--txt-1); color:var(--bg-panel); font-size:16px">設</div>
+          <div>
+            <div class="text-sm font-semibold serif">機械設計技術部</div>
+            <div class="text-[11px]" style="color:var(--txt-3)">タスク管理 · v0.3</div>
+          </div>
+        </div>
+
+        <div class="px-3 pt-2">
+          <div class="search">
+            <span style="font-size:13px">⌕</span>
+            <span>検索…</span>
+            <span class="kbd">⌘K</span>
+          </div>
+        </div>
+
+        <div class="nav-section">ワークスペース</div>
+        <div class="px-2 space-y-0.5">
+          <div class="nav-item active">
+            <span style="width:16px; text-align:center">▦</span>
+            <span>ガント / 日報</span>
+          </div>
+          <div class="nav-item">
+            <span style="width:16px; text-align:center">◉</span>
+            <span>本日のタスク</span>
+            <span class="ml-auto text-[10px] mono" style="color:var(--txt-3)">14</span>
+          </div>
+          <div class="nav-item">
+            <span style="width:16px; text-align:center">✉</span>
+            <span>メール下書き</span>
+            <span class="ml-auto badge badge-pending" style="padding:1px 7px; font-size:10px">3</span>
+          </div>
+          <div class="nav-item">
+            <span style="width:16px; text-align:center">◫</span>
+            <span>案件一覧</span>
+          </div>
+          <div class="nav-item">
+            <span style="width:16px; text-align:center">⊟</span>
+            <span>レポート</span>
+          </div>
+        </div>
+
+        <div class="nav-section">スタッフ</div>
+        <div class="px-2 space-y-0.5">
+          <div class="nav-item"><span class="w-5 h-5 rounded-full grid place-items-center text-[9px] font-semibold text-white av-1">山</span><span>山田 太郎</span></div>
+          <div class="nav-item"><span class="w-5 h-5 rounded-full grid place-items-center text-[9px] font-semibold text-white av-2">鈴</span><span>鈴木 花子</span></div>
+          <div class="nav-item"><span class="w-5 h-5 rounded-full grid place-items-center text-[9px] font-semibold av-3">田</span><span>田中 一郎</span></div>
+          <div class="nav-item"><span class="w-5 h-5 rounded-full grid place-items-center text-[9px] font-semibold text-white av-4">佐</span><span>佐藤 二郎</span></div>
+          <div class="nav-item"><span class="w-5 h-5 rounded-full grid place-items-center text-[9px] font-semibold text-white av-5">高</span><span>高橋 三郎</span></div>
+          <div class="nav-item"><span class="w-5 h-5 rounded-full grid place-items-center text-[9px] font-semibold text-white av-6">渡</span><span>渡辺 四郎</span></div>
+        </div>
+
+        <div class="nav-section">案件</div>
+        <div class="px-2 space-y-0.5">
+          <div class="nav-item"><span class="swatch bar-clay"></span><span class="mono text-[12px]">K-12345</span><span style="color:var(--txt-3)" class="text-[11px]">ABC社</span></div>
+          <div class="nav-item"><span class="swatch bar-plum"></span><span class="mono text-[12px]">K-12346</span><span style="color:var(--txt-3)" class="text-[11px]">DEF社</span></div>
+          <div class="nav-item"><span class="swatch bar-ochre"></span><span class="mono text-[12px]">K-12347</span><span style="color:var(--txt-3)" class="text-[11px]">GHI社</span></div>
+          <div class="nav-item"><span class="swatch bar-moss"></span><span class="mono text-[12px]">K-12348</span><span style="color:var(--txt-3)" class="text-[11px]">JKL社</span></div>
+          <div class="nav-item"><span class="swatch bar-indigo"></span><span class="mono text-[12px]">K-12349</span><span style="color:var(--txt-3)" class="text-[11px]">MNO社</span></div>
+        </div>
+
+        <div class="px-4 mt-6 pt-4" style="border-top: 1px solid var(--line)">
+          <div class="text-[11px]" style="color:var(--txt-3)">サインイン中</div>
+          <div class="flex items-center gap-2 mt-1.5">
+            <div class="w-7 h-7 rounded-full grid place-items-center text-[10px] font-semibold text-white av-1">IM</div>
+            <div>
+              <div class="text-[12.5px] font-medium">今泉</div>
+              <div class="text-[10.5px] mono" style="color:var(--txt-3)">imaizumi@lineworks-local.info</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- ═══════════════ MAIN ═══════════════ -->
+      <main class="px-8 pt-7 pb-10">
+
+        <!-- ── Page header ── -->
+        <div class="flex items-end justify-between mb-7">
+          <div>
+            <div class="section-eyebrow mb-2">2026年5月8日 · 金曜日</div>
+            <h1 class="serif" style="font-size:32px; font-weight:600; letter-spacing:-0.015em">本日の予定 と 業務報告</h1>
+            <div class="section-sub mt-1.5">6名 · 進行中 5案件 · 送信待ち <span style="color:var(--warn); font-weight:500">3件</span></div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button class="nav-btn">‹ 前月</button>
+            <button class="nav-btn">本日</button>
+            <button class="nav-btn">次月 ›</button>
+            <span class="mx-2" style="width:1px; height:24px; background:var(--line-2)"></span>
+            <select class="nav-btn pr-7" style="appearance:none; background-image: linear-gradient(45deg, transparent 50%, var(--txt-2) 50%), linear-gradient(135deg, var(--txt-2) 50%, transparent 50%); background-position: calc(100% - 14px) 50%, calc(100% - 10px) 50%; background-size: 4px 4px; background-repeat: no-repeat;">
+              <option>標準（64px/日）</option><option>狭い（48px/日）</option><option>広い（96px/日）</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- ── Stats row ── -->
+        <div class="grid grid-cols-4 gap-4 mb-8">
+          <div class="panel rounded-xl px-5 py-4">
+            <div class="section-eyebrow">本日のタスク</div>
+            <div class="serif tnum mt-1.5" style="font-size:28px; font-weight:600; letter-spacing:-0.02em">14<span class="text-base ml-1.5" style="color:var(--txt-3); font-weight:400">件</span></div>
+            <div class="text-[11.5px] mt-0.5" style="color:var(--ok)">↑ 昨日比 +2</div>
+          </div>
+          <div class="panel rounded-xl px-5 py-4">
+            <div class="section-eyebrow">送信待ちメール</div>
+            <div class="serif tnum mt-1.5" style="font-size:28px; font-weight:600; letter-spacing:-0.02em; color:var(--warn)">3<span class="text-base ml-1.5" style="color:var(--txt-3); font-weight:400">件</span></div>
+            <div class="text-[11.5px] mt-0.5" style="color:var(--txt-3)">EXE 処理中: 1</div>
+          </div>
+          <div class="panel rounded-xl px-5 py-4">
+            <div class="section-eyebrow">送信済</div>
+            <div class="serif tnum mt-1.5" style="font-size:28px; font-weight:600; letter-spacing:-0.02em; color:var(--ok)">2<span class="text-base ml-1.5" style="color:var(--txt-3); font-weight:400">件</span></div>
+            <div class="text-[11.5px] mt-0.5" style="color:var(--txt-3)">最終: 09:12</div>
+          </div>
+          <div class="panel rounded-xl px-5 py-4">
+            <div class="section-eyebrow">要対応</div>
+            <div class="serif tnum mt-1.5" style="font-size:28px; font-weight:600; letter-spacing:-0.02em; color:var(--err)">1<span class="text-base ml-1.5" style="color:var(--txt-3); font-weight:400">件</span></div>
+            <div class="text-[11.5px] mt-0.5" style="color:var(--err)">送信失敗 · 佐藤</div>
+          </div>
+        </div>
+
+        <!-- ── Gantt section ── -->
+        <div class="flex items-end justify-between mb-3">
+          <div>
+            <div class="section-eyebrow mb-1">スケジュール</div>
+            <h2 class="section-title">ガントチャート</h2>
+          </div>
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-[11.5px]" style="color:var(--txt-2)">
+            <span class="flex items-center gap-1.5"><span class="swatch bar-clay"></span>K-12345</span>
+            <span class="flex items-center gap-1.5"><span class="swatch bar-plum"></span>K-12346</span>
+            <span class="flex items-center gap-1.5"><span class="swatch bar-ochre"></span>K-12347</span>
+            <span class="flex items-center gap-1.5"><span class="swatch bar-moss"></span>K-12348</span>
+            <span class="flex items-center gap-1.5"><span class="swatch bar-indigo"></span>K-12349</span>
+            <span class="flex items-center gap-1.5"><span class="swatch bar-burgundy"></span>一般作業</span>
+            <span class="flex items-center gap-1.5"><span class="swatch bar-stone"></span>不在/休暇</span>
+          </div>
+        </div>
+
+        <div class="gantt-wrap shadow-soft">
+          <div class="gantt-scroll">
+            <div class="gantt-table">
+
+              <!-- left fixed -->
+              <div class="gantt-staff-col">
+                <div class="staff-cell header" style="height:64px">スタッフ</div>
+                <div class="staff-cell">
+                  <div class="avatar av-1">山</div>
+                  <div class="name"><span>山田 太郎</span><span class="email mono">yamada</span></div>
+                </div>
+                <div class="staff-cell">
+                  <div class="avatar av-2">鈴</div>
+                  <div class="name"><span>鈴木 花子</span><span class="email mono">suzuki</span></div>
+                </div>
+                <div class="staff-cell">
+                  <div class="avatar av-3">田</div>
+                  <div class="name"><span>田中 一郎</span><span class="email mono">tanaka</span></div>
+                </div>
+                <div class="staff-cell">
+                  <div class="avatar av-4">佐</div>
+                  <div class="name"><span>佐藤 二郎</span><span class="email mono">sato</span></div>
+                </div>
+                <div class="staff-cell">
+                  <div class="avatar av-5">高</div>
+                  <div class="name"><span>高橋 三郎</span><span class="email mono">takahashi</span></div>
+                </div>
+                <div class="staff-cell" style="border-bottom: none">
+                  <div class="avatar av-6">渡</div>
+                  <div class="name"><span>渡辺 四郎</span><span class="email mono">watanabe</span></div>
+                </div>
+              </div>
+
+              <!-- right scroll -->
+              <div class="gantt-days" style="grid-template-columns: repeat(46, 64px); grid-template-rows: 32px 32px repeat(6, 56px);">
+
+                <div class="gantt-month" style="grid-column: 1 / span 31;">2026年 5月</div>
+                <div class="gantt-month" style="grid-column: 32 / span 15;">2026年 6月</div>
+
+                <!-- 5月 -->
+                <div class="gantt-day-head"><span class="dnum">1</span><span class="dow">金</span></div>
+                <div class="gantt-day-head sat weekend"><span class="dnum">2</span><span class="dow">土</span></div>
+                <div class="gantt-day-head sun weekend"><span class="dnum">3</span><span class="dow">日</span></div>
+                <div class="gantt-day-head"><span class="dnum">4</span><span class="dow">月</span></div>
+                <div class="gantt-day-head"><span class="dnum">5</span><span class="dow">火</span></div>
+                <div class="gantt-day-head"><span class="dnum">6</span><span class="dow">水</span></div>
+                <div class="gantt-day-head"><span class="dnum">7</span><span class="dow">木</span></div>
+                <div class="gantt-day-head today"><span class="dnum">8</span><span class="dow">金</span></div>
+                <div class="gantt-day-head sat weekend"><span class="dnum">9</span><span class="dow">土</span></div>
+                <div class="gantt-day-head sun weekend"><span class="dnum">10</span><span class="dow">日</span></div>
+                <div class="gantt-day-head"><span class="dnum">11</span><span class="dow">月</span></div>
+                <div class="gantt-day-head"><span class="dnum">12</span><span class="dow">火</span></div>
+                <div class="gantt-day-head"><span class="dnum">13</span><span class="dow">水</span></div>
+                <div class="gantt-day-head"><span class="dnum">14</span><span class="dow">木</span></div>
+                <div class="gantt-day-head"><span class="dnum">15</span><span class="dow">金</span></div>
+                <div class="gantt-day-head sat weekend"><span class="dnum">16</span><span class="dow">土</span></div>
+                <div class="gantt-day-head sun weekend"><span class="dnum">17</span><span class="dow">日</span></div>
+                <div class="gantt-day-head"><span class="dnum">18</span><span class="dow">月</span></div>
+                <div class="gantt-day-head"><span class="dnum">19</span><span class="dow">火</span></div>
+                <div class="gantt-day-head"><span class="dnum">20</span><span class="dow">水</span></div>
+                <div class="gantt-day-head"><span class="dnum">21</span><span class="dow">木</span></div>
+                <div class="gantt-day-head"><span class="dnum">22</span><span class="dow">金</span></div>
+                <div class="gantt-day-head sat weekend"><span class="dnum">23</span><span class="dow">土</span></div>
+                <div class="gantt-day-head sun weekend"><span class="dnum">24</span><span class="dow">日</span></div>
+                <div class="gantt-day-head"><span class="dnum">25</span><span class="dow">月</span></div>
+                <div class="gantt-day-head"><span class="dnum">26</span><span class="dow">火</span></div>
+                <div class="gantt-day-head"><span class="dnum">27</span><span class="dow">水</span></div>
+                <div class="gantt-day-head"><span class="dnum">28</span><span class="dow">木</span></div>
+                <div class="gantt-day-head"><span class="dnum">29</span><span class="dow">金</span></div>
+                <div class="gantt-day-head sat weekend"><span class="dnum">30</span><span class="dow">土</span></div>
+                <div class="gantt-day-head sun weekend"><span class="dnum">31</span><span class="dow">日</span></div>
+                <!-- 6月 -->
+                <div class="gantt-day-head"><span class="dnum">1</span><span class="dow">月</span></div>
+                <div class="gantt-day-head"><span class="dnum">2</span><span class="dow">火</span></div>
+                <div class="gantt-day-head"><span class="dnum">3</span><span class="dow">水</span></div>
+                <div class="gantt-day-head"><span class="dnum">4</span><span class="dow">木</span></div>
+                <div class="gantt-day-head"><span class="dnum">5</span><span class="dow">金</span></div>
+                <div class="gantt-day-head sat weekend"><span class="dnum">6</span><span class="dow">土</span></div>
+                <div class="gantt-day-head sun weekend"><span class="dnum">7</span><span class="dow">日</span></div>
+                <div class="gantt-day-head"><span class="dnum">8</span><span class="dow">月</span></div>
+                <div class="gantt-day-head"><span class="dnum">9</span><span class="dow">火</span></div>
+                <div class="gantt-day-head"><span class="dnum">10</span><span class="dow">水</span></div>
+                <div class="gantt-day-head"><span class="dnum">11</span><span class="dow">木</span></div>
+                <div class="gantt-day-head"><span class="dnum">12</span><span class="dow">金</span></div>
+                <div class="gantt-day-head sat weekend"><span class="dnum">13</span><span class="dow">土</span></div>
+                <div class="gantt-day-head sun weekend"><span class="dnum">14</span><span class="dow">日</span></div>
+                <div class="gantt-day-head"><span class="dnum">15</span><span class="dow">月</span></div>
+
+                <!-- ROW 山田 -->
+                <div style="grid-row:3; grid-column:1 / span 46; position:relative; background:transparent; border-bottom:1px solid var(--line);">
+                  <div style="position:absolute; inset:0; display:grid; grid-template-columns:repeat(46, 64px);">
+                    <div class="gantt-cell"></div><div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell today"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div>
+                  </div>
+                  <div class="gantt-bar bar-clay"   style="left: calc(64px * 3 + 4px);  width: calc(64px * 3 - 8px);">K-12345 ABC社 · 図面作成</div>
+                  <div class="gantt-bar bar-plum"   style="left: calc(64px * 6 + 4px);  width: calc(64px * 2 - 8px);">K-12346 · 検図</div>
+                  <div class="gantt-bar bar-ochre"  style="left: calc(64px * 10 + 4px); width: calc(64px * 4 - 8px);">K-12347 · 修正対応</div>
+                  <div class="gantt-bar bar-clay"   style="left: calc(64px * 17 + 4px); width: calc(64px * 3 - 8px);">K-12345 · 検図対応</div>
+                  <div class="gantt-bar bar-moss"   style="left: calc(64px * 24 + 4px); width: calc(64px * 5 - 8px);">K-12348 · 図面作成</div>
+                  <div class="gantt-bar bar-indigo" style="left: calc(64px * 31 + 4px); width: calc(64px * 6 - 8px);">K-12349 MNO社 · 図面作成</div>
+                </div>
+
+                <!-- ROW 鈴木 -->
+                <div style="grid-row:4; grid-column:1 / span 46; position:relative; background:var(--bg-row); border-bottom:1px solid var(--line);">
+                  <div style="position:absolute; inset:0; display:grid; grid-template-columns:repeat(46, 64px);">
+                    <div class="gantt-cell"></div><div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell today"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div>
+                  </div>
+                  <div class="gantt-bar bar-ochre"    style="left: calc(64px * 4 + 4px);  width: calc(64px * 3 - 8px);">K-12347 GHI社 · 図面作成</div>
+                  <div class="gantt-bar bar-burgundy" style="left: calc(64px * 7 + 4px);  width: calc(64px * 1 - 8px);">勉強会</div>
+                  <div class="gantt-bar bar-ochre"    style="left: calc(64px * 12 + 4px); width: calc(64px * 5 - 8px);">K-12347 · 検図</div>
+                  <div class="gantt-bar bar-plum"     style="left: calc(64px * 21 + 4px); width: calc(64px * 4 - 8px);">K-12346 · 立会</div>
+                  <div class="gantt-bar bar-indigo"   style="left: calc(64px * 30 + 4px); width: calc(64px * 5 - 8px);">K-12349 · 検図対応</div>
+                </div>
+
+                <!-- ROW 田中 -->
+                <div style="grid-row:5; grid-column:1 / span 46; position:relative; background:transparent; border-bottom:1px solid var(--line);">
+                  <div style="position:absolute; inset:0; display:grid; grid-template-columns:repeat(46, 64px);">
+                    <div class="gantt-cell"></div><div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell today"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div>
+                  </div>
+                  <div class="gantt-bar bar-moss"   style="left: calc(64px * 0 + 4px);  width: calc(64px * 4 - 8px);">K-12348 JKL社 · 検図</div>
+                  <div class="gantt-bar bar-clay"   style="left: calc(64px * 5 + 4px);  width: calc(64px * 2 - 8px);">K-12345 · 修正対応</div>
+                  <div class="gantt-bar bar-ochre"  style="left: calc(64px * 7 + 4px);  width: calc(64px * 1 - 8px);">K-12347 · 出図</div>
+                  <div class="gantt-bar bar-plum"   style="left: calc(64px * 14 + 4px); width: calc(64px * 6 - 8px);">K-12346 · 図面作成</div>
+                  <div class="gantt-bar bar-indigo" style="left: calc(64px * 25 + 4px); width: calc(64px * 8 - 8px);">K-12349 MNO社 · 設計レビュー</div>
+                </div>
+
+                <!-- ROW 佐藤 -->
+                <div style="grid-row:6; grid-column:1 / span 46; position:relative; background:var(--bg-row); border-bottom:1px solid var(--line);">
+                  <div style="position:absolute; inset:0; display:grid; grid-template-columns:repeat(46, 64px);">
+                    <div class="gantt-cell"></div><div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell today"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div>
+                  </div>
+                  <div class="gantt-bar bar-stone"    style="left: calc(64px * 5 + 4px);  width: calc(64px * 2 - 8px);">不在 · 出張</div>
+                  <div class="gantt-bar bar-plum"     style="left: calc(64px * 7 + 4px);  width: calc(64px * 1 - 8px);">K-12346 · 立会</div>
+                  <div class="gantt-bar bar-moss"     style="left: calc(64px * 13 + 4px); width: calc(64px * 4 - 8px);">K-12348 · 検図</div>
+                  <div class="gantt-bar bar-ochre"    style="left: calc(64px * 20 + 4px); width: calc(64px * 3 - 8px);">K-12347 · 出図</div>
+                  <div class="gantt-bar bar-burgundy" style="left: calc(64px * 28 + 4px); width: calc(64px * 2 - 8px);">棚卸</div>
+                  <div class="gantt-bar bar-clay"     style="left: calc(64px * 35 + 4px); width: calc(64px * 5 - 8px);">K-12345 · 修正対応</div>
+                </div>
+
+                <!-- ROW 高橋 -->
+                <div style="grid-row:7; grid-column:1 / span 46; position:relative; background:transparent; border-bottom:1px solid var(--line);">
+                  <div style="position:absolute; inset:0; display:grid; grid-template-columns:repeat(46, 64px);">
+                    <div class="gantt-cell"></div><div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell today"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div>
+                  </div>
+                  <div class="gantt-bar bar-indigo"   style="left: calc(64px * 0 + 4px);  width: calc(64px * 7 - 8px);">K-12349 MNO社 · 図面作成（連日）</div>
+                  <div class="gantt-bar bar-clay"     style="left: calc(64px * 10 + 4px); width: calc(64px * 4 - 8px);">K-12345 · 検図</div>
+                  <div class="gantt-bar bar-ochre"    style="left: calc(64px * 17 + 4px); width: calc(64px * 5 - 8px);">K-12347 · 出図</div>
+                  <div class="gantt-bar bar-moss"     style="left: calc(64px * 24 + 4px); width: calc(64px * 6 - 8px);">K-12348 · 立会</div>
+                  <div class="gantt-bar bar-burgundy" style="left: calc(64px * 32 + 4px); width: calc(64px * 4 - 8px);">一般作業 · 整備</div>
+                </div>
+
+                <!-- ROW 渡辺 -->
+                <div style="grid-row:8; grid-column:1 / span 46; position:relative; background:var(--bg-row);">
+                  <div style="position:absolute; inset:0; display:grid; grid-template-columns:repeat(46, 64px);">
+                    <div class="gantt-cell"></div><div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell today"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+                    <div class="gantt-cell weekend"></div><div class="gantt-cell weekend"></div>
+                    <div class="gantt-cell"></div>
+                  </div>
+                  <div class="gantt-bar bar-burgundy" style="left: calc(64px * 2 + 4px);  width: calc(64px * 3 - 8px);">一般作業 · 工具棚卸</div>
+                  <div class="gantt-bar bar-clay"     style="left: calc(64px * 7 + 4px);  width: calc(64px * 1 - 8px);">K-12345 · 検図</div>
+                  <div class="gantt-bar bar-plum"     style="left: calc(64px * 11 + 4px); width: calc(64px * 5 - 8px);">K-12346 · 図面作成</div>
+                  <div class="gantt-bar bar-moss"     style="left: calc(64px * 19 + 4px); width: calc(64px * 6 - 8px);">K-12348 · 検図</div>
+                  <div class="gantt-bar bar-indigo"   style="left: calc(64px * 28 + 4px); width: calc(64px * 4 - 8px);">K-12349 · 修正対応</div>
+                  <div class="gantt-bar bar-ochre"    style="left: calc(64px * 35 + 4px); width: calc(64px * 5 - 8px);">K-12347 · 出図対応</div>
+                </div>
+
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="text-[11.5px] mt-3" style="color:var(--txt-3)">
+          <span class="mono">·</span> 横スクロールで連続表示
+          <span class="mono mx-2">·</span> ドラッグでバー作成
+          <span class="mono mx-2">·</span> 両端ドラッグで期間延長
+          <span class="mono mx-2">·</span> 本体ドラッグで日程移動
+          <span class="mono mx-2">·</span> ダブルクリックで詳細編集
+        </div>
+
+        <!-- ── Daily Reports ── -->
+        <div class="mt-12 mb-4 flex items-end justify-between">
+          <div>
+            <div class="section-eyebrow mb-1">作業内容 / 業務報告</div>
+            <h2 class="section-title">本日の業務報告</h2>
+          </div>
+          <div class="text-[12px]" style="color:var(--txt-3)">対象日 <span class="mono" style="color:var(--txt-2)">2026/05/08</span> 金</div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+
+          <!-- 山田 -->
+          <article class="panel rounded-xl overflow-hidden shadow-soft">
+            <header class="px-4 py-3 flex items-center justify-between" style="border-bottom:1px solid var(--line)">
+              <div class="flex items-center gap-2.5">
+                <div class="w-8 h-8 rounded-full grid place-items-center text-[11px] font-semibold text-white av-1">山</div>
+                <div class="leading-tight">
+                  <div class="text-[13.5px] font-semibold">山田 太郎</div>
+                  <div class="text-[10.5px] mono" style="color:var(--txt-3)">yamada@example.com</div>
+                </div>
+              </div>
+              <span class="badge badge-drafted">下書き作成済</span>
+            </header>
+            <div class="px-4 py-3.5">
+              <div class="rule">本日の作業内容</div>
+              <div class="space-y-1.5">
+                <div class="row-line">
+                  <span class="pill pill-accent">5/8–5/9</span>
+                  <span class="truncate"><b class="mono" style="font-weight:600">K-12345</b> ABC社 製品A · 図面作成 / 外形図修正</span>
+                  <span class="swatch bar-clay"></span>
+                </div>
+                <div class="row-line">
+                  <span class="pill pill-accent">5/8</span>
+                  <span class="truncate"><b class="mono" style="font-weight:600">K-12350</b> DEF社 製品B · 検図 / 検図完了</span>
+                  <span class="swatch bar-plum"></span>
+                </div>
+                <div class="row-line row-add">
+                  <span class="pill">+ 追加</span>
+                  <span>クリックで作業内容を追加</span><span></span>
+                </div>
+              </div>
+              <div class="rule mt-4">前日までの報告</div>
+              <div class="space-y-1.5">
+                <div class="row-line">
+                  <span class="pill">5/7</span>
+                  <span class="truncate"><b class="mono" style="font-weight:600">K-12345</b> ABC社 製品A · 内部レビュー対応</span>
+                  <span class="swatch bar-clay" style="opacity:.5"></span>
+                </div>
+                <div class="row-line row-add">
+                  <span class="pill">+ 追加</span>
+                  <span>クリックで報告を追加</span><span></span>
+                </div>
+              </div>
+            </div>
+            <footer class="px-4 py-2.5 flex items-center justify-between" style="border-top:1px solid var(--line); background:var(--bg-soft)">
+              <span class="text-[11px]" style="color:var(--txt-3)">最終更新 <span class="mono">12:34</span></span>
+              <button class="btn-accent text-xs" style="padding:6px 14px">メール下書き作成</button>
+            </footer>
+          </article>
+
+          <!-- 鈴木 -->
+          <article class="panel rounded-xl overflow-hidden shadow-soft">
+            <header class="px-4 py-3 flex items-center justify-between" style="border-bottom:1px solid var(--line)">
+              <div class="flex items-center gap-2.5">
+                <div class="w-8 h-8 rounded-full grid place-items-center text-[11px] font-semibold text-white av-2">鈴</div>
+                <div class="leading-tight">
+                  <div class="text-[13.5px] font-semibold">鈴木 花子</div>
+                  <div class="text-[10.5px] mono" style="color:var(--txt-3)">suzuki@example.com</div>
+                </div>
+              </div>
+              <span class="badge badge-sent">送信済</span>
+            </header>
+            <div class="px-4 py-3.5">
+              <div class="rule">本日の作業内容</div>
+              <div class="space-y-1.5">
+                <div class="row-line">
+                  <span class="pill pill-accent">5/5–5/7</span>
+                  <span class="truncate"><b class="mono" style="font-weight:600">K-12347</b> GHI社 製品C · 図面作成</span>
+                  <span class="swatch bar-ochre"></span>
+                </div>
+                <div class="row-line">
+                  <span class="pill pill-accent">5/8</span>
+                  <span class="truncate">一般作業 · 社内勉強会 出席</span>
+                  <span class="swatch bar-burgundy"></span>
+                </div>
+              </div>
+              <div class="rule mt-4">前日までの報告</div>
+              <div class="space-y-1.5">
+                <div class="row-line">
+                  <span class="pill">5/6–5/7</span>
+                  <span class="truncate"><b class="mono" style="font-weight:600">K-12347</b> GHI社 製品C · 着手</span>
+                  <span class="swatch bar-ochre" style="opacity:.5"></span>
+                </div>
+              </div>
+            </div>
+            <footer class="px-4 py-2.5 flex items-center justify-between" style="border-top:1px solid var(--line); background:var(--bg-soft)">
+              <span class="text-[11px]" style="color:var(--ok)">本日 <span class="mono">09:12</span> に送信済</span>
+              <button class="btn-secondary text-xs" style="padding:6px 14px">再送する</button>
+            </footer>
+          </article>
+
+          <!-- 田中 -->
+          <article class="panel rounded-xl overflow-hidden shadow-soft" style="border-color: rgba(184,134,42,0.5); box-shadow: 0 0 0 3px rgba(184,134,42,0.06), 0 1px 0 rgba(60,40,20,0.04), 0 8px 20px rgba(60,40,20,0.04);">
+            <header class="px-4 py-3 flex items-center justify-between" style="border-bottom:1px solid var(--line)">
+              <div class="flex items-center gap-2.5">
+                <div class="w-8 h-8 rounded-full grid place-items-center text-[11px] font-semibold av-3">田</div>
+                <div class="leading-tight">
+                  <div class="text-[13.5px] font-semibold">田中 一郎</div>
+                  <div class="text-[10.5px] mono" style="color:var(--txt-3)">tanaka@example.com</div>
+                </div>
+              </div>
+              <span class="badge badge-pending">送信待ち</span>
+            </header>
+            <div class="px-4 py-3.5">
+              <div class="rule">本日の作業内容</div>
+              <div class="space-y-1.5">
+                <div class="row-line">
+                  <span class="pill pill-accent">5/4–5/5</span>
+                  <span class="truncate"><b class="mono" style="font-weight:600">K-12348</b> JKL社 製品D · 検図</span>
+                  <span class="swatch bar-moss"></span>
+                </div>
+                <div class="row-line">
+                  <span class="pill pill-accent">5/6–5/7</span>
+                  <span class="truncate"><b class="mono" style="font-weight:600">K-12345</b> ABC社 製品A · 修正対応</span>
+                  <span class="swatch bar-clay"></span>
+                </div>
+                <div class="row-line">
+                  <span class="pill pill-accent">5/8</span>
+                  <span class="truncate"><b class="mono" style="font-weight:600">K-12347</b> GHI社 製品C · 出図</span>
+                  <span class="swatch bar-ochre"></span>
+                </div>
+              </div>
+              <div class="rule mt-4">前日までの報告</div>
+              <div class="space-y-1.5">
+                <div class="row-line row-add">
+                  <span class="pill">+ 追加</span>
+                  <span>未入力</span><span></span>
+                </div>
+              </div>
+            </div>
+            <footer class="px-4 py-2.5 flex items-center justify-between" style="border-top:1px solid var(--line); background:var(--bg-soft)">
+              <span class="text-[11px] flex items-center gap-1.5" style="color:var(--warn)">
+                <span class="inline-block w-1.5 h-1.5 rounded-full" style="background:var(--warn); animation: pulse 1.6s infinite"></span>
+                EXE が処理中
+              </span>
+              <button class="btn-secondary text-xs" style="padding:6px 14px; opacity:.6" disabled>処理中…</button>
+            </footer>
+          </article>
+
+          <!-- 佐藤 -->
+          <article class="panel rounded-xl overflow-hidden shadow-soft" style="border-color: rgba(161,59,42,0.45);">
+            <header class="px-4 py-3 flex items-center justify-between" style="border-bottom:1px solid var(--line)">
+              <div class="flex items-center gap-2.5">
+                <div class="w-8 h-8 rounded-full grid place-items-center text-[11px] font-semibold text-white av-4">佐</div>
+                <div class="leading-tight">
+                  <div class="text-[13.5px] font-semibold">佐藤 二郎</div>
+                  <div class="text-[10.5px] mono" style="color:var(--txt-3)">sato@example.com</div>
+                </div>
+              </div>
+              <span class="badge badge-failed">送信失敗</span>
+            </header>
+            <div class="px-4 py-3.5">
+              <div class="rule">本日の作業内容</div>
+              <div class="space-y-1.5">
+                <div class="row-line">
+                  <span class="pill pill-accent">5/8</span>
+                  <span class="truncate"><b class="mono" style="font-weight:600">K-12346</b> DEF社 製品B · 立会</span>
+                  <span class="swatch bar-plum"></span>
+                </div>
+              </div>
+              <div class="rule mt-4">前日までの報告</div>
+              <div class="space-y-1.5">
+                <div class="row-line">
+                  <span class="pill">5/6–5/7</span>
+                  <span class="truncate">不在 · 出張（東京）</span>
+                  <span class="swatch bar-stone" style="opacity:.5"></span>
+                </div>
+              </div>
+              <div class="mt-3 px-3 py-2 text-[11.5px] rounded-md flex items-start gap-2" style="background:var(--err-soft); color:var(--err); border:1px solid rgba(161,59,42,.25)">
+                <span style="font-size:13px; line-height:1">⚠</span>
+                <span>メールアドレス不一致 · Outlook プロファイルが一致しません</span>
+              </div>
+            </div>
+            <footer class="px-4 py-2.5 flex items-center justify-between" style="border-top:1px solid var(--line); background:var(--bg-soft)">
+              <span class="text-[11px]" style="color:var(--err)">最終試行 <span class="mono">12:30</span></span>
+              <button class="btn-secondary text-xs" style="padding:6px 14px">↻ 再試行</button>
+            </footer>
+          </article>
+
+          <!-- 高橋 -->
+          <article class="panel rounded-xl overflow-hidden shadow-soft">
+            <header class="px-4 py-3 flex items-center justify-between" style="border-bottom:1px solid var(--line)">
+              <div class="flex items-center gap-2.5">
+                <div class="w-8 h-8 rounded-full grid place-items-center text-[11px] font-semibold text-white av-5">高</div>
+                <div class="leading-tight">
+                  <div class="text-[13.5px] font-semibold">高橋 三郎</div>
+                  <div class="text-[10.5px] mono" style="color:var(--txt-3)">takahashi@example.com</div>
+                </div>
+              </div>
+              <span class="badge badge-idle">未送信</span>
+            </header>
+            <div class="px-4 py-3.5">
+              <div class="rule">本日の作業内容</div>
+              <div class="space-y-1.5">
+                <div class="row-line">
+                  <span class="pill pill-accent">5/4–5/7</span>
+                  <span class="truncate"><b class="mono" style="font-weight:600">K-12349</b> MNO社 製品E · 図面作成（連日）</span>
+                  <span class="swatch bar-indigo"></span>
+                </div>
+              </div>
+              <div class="rule mt-4">前日までの報告</div>
+              <div class="space-y-1.5">
+                <div class="row-line row-add">
+                  <span class="pill">+ 追加</span>
+                  <span>未入力</span><span></span>
+                </div>
+              </div>
+            </div>
+            <footer class="px-4 py-2.5 flex items-center justify-between" style="border-top:1px solid var(--line); background:var(--bg-soft)">
+              <span class="text-[11px]" style="color:var(--txt-3)">最終更新 <span class="mono">11:48</span></span>
+              <button class="btn-accent text-xs" style="padding:6px 14px">メール下書き作成</button>
+            </footer>
+          </article>
+
+          <!-- 渡辺 -->
+          <article class="panel rounded-xl overflow-hidden shadow-soft">
+            <header class="px-4 py-3 flex items-center justify-between" style="border-bottom:1px solid var(--line)">
+              <div class="flex items-center gap-2.5">
+                <div class="w-8 h-8 rounded-full grid place-items-center text-[11px] font-semibold text-white av-6">渡</div>
+                <div class="leading-tight">
+                  <div class="text-[13.5px] font-semibold">渡辺 四郎</div>
+                  <div class="text-[10.5px] mono" style="color:var(--txt-3)">watanabe@example.com</div>
+                </div>
+              </div>
+              <span class="badge badge-idle">未送信</span>
+            </header>
+            <div class="px-4 py-3.5">
+              <div class="rule">本日の作業内容</div>
+              <div class="space-y-1.5">
+                <div class="row-line">
+                  <span class="pill pill-accent">5/8</span>
+                  <span class="truncate"><b class="mono" style="font-weight:600">K-12345</b> ABC社 製品A · 検図</span>
+                  <span class="swatch bar-clay"></span>
+                </div>
+              </div>
+              <div class="rule mt-4">前日までの報告</div>
+              <div class="space-y-1.5">
+                <div class="row-line">
+                  <span class="pill">5/6–5/7</span>
+                  <span class="truncate">一般作業 · 工具棚卸 / 完了</span>
+                  <span class="swatch bar-burgundy" style="opacity:.5"></span>
+                </div>
+              </div>
+            </div>
+            <footer class="px-4 py-2.5 flex items-center justify-between" style="border-top:1px solid var(--line); background:var(--bg-soft)">
+              <span class="text-[11px]" style="color:var(--txt-3)">最終更新 <span class="mono">13:02</span></span>
+              <button class="btn-accent text-xs" style="padding:6px 14px">メール下書き作成</button>
+            </footer>
+          </article>
+        </div>
+
+        <!-- ── Mail modal preview ── -->
+        <div class="mt-14">
+          <div class="section-eyebrow mb-2">モーダル · プレビュー</div>
+          <div class="text-[12px] mb-4" style="color:var(--txt-3)">「メール下書き作成」押下時のダイアログ</div>
+
+          <div class="max-w-2xl mx-auto window shadow-deep">
+            <div class="titlebar">
+              <div class="flex items-center gap-2">
+                <span class="traffic r"></span>
+                <span class="traffic y"></span>
+                <span class="traffic g"></span>
+              </div>
+              <div class="ttl serif">メール送信内容の確認</div>
+              <div style="color:var(--txt-3); font-size:13px">×</div>
+            </div>
+
+            <div class="p-6 space-y-5 text-sm">
+
+              <div class="grid grid-cols-[140px_1fr] gap-y-3 gap-x-4 items-center">
+                <span style="color:var(--txt-3)" class="text-[11.5px]">作業スタッフ</span>
+                <div class="flex items-center gap-2">
+                  <div class="w-7 h-7 rounded-full grid place-items-center text-[10.5px] font-semibold text-white av-1">山</div>
+                  <span class="font-semibold">山田 太郎</span>
+                </div>
+
+                <span style="color:var(--txt-3)" class="text-[11.5px]">登録メールアドレス</span>
+                <span class="flex items-center gap-2">
+                  <span class="mono text-[12.5px]">yamada@example.com</span>
+                  <span class="badge badge-sent">✓ 一致確認OK</span>
+                </span>
+              </div>
+
+              <div>
+                <div class="text-[11.5px] mb-2" style="color:var(--txt-3)">送付先 <span class="mono">5名</span></div>
+                <div class="text-[11.5px] mono px-3.5 py-2.5 rounded-md space-y-0.5" style="background:var(--bg-soft); color:var(--txt-2); border:1px solid var(--line)">
+                  <div>suzuki@example.com</div>
+                  <div>tanaka@example.com</div>
+                  <div>sato@example.com</div>
+                  <div>takahashi@example.com</div>
+                  <div>watanabe@example.com</div>
+                </div>
+              </div>
+
+              <div>
+                <div class="text-[11.5px] mb-2" style="color:var(--txt-3)">送信モード</div>
+                <div class="grid grid-cols-2 gap-2.5">
+                  <label class="px-3.5 py-3 rounded-md cursor-pointer flex items-start gap-2.5" style="border:1.5px solid var(--accent); background:var(--accent-soft)">
+                    <input type="radio" name="mode" checked class="mt-0.5">
+                    <div>
+                      <div class="text-[13px] font-semibold serif" style="color:var(--accent-2)">下書きを作成</div>
+                      <div class="text-[11px] mt-0.5" style="color:var(--txt-3)">推奨 · 既定</div>
+                    </div>
+                  </label>
+                  <label class="px-3.5 py-3 rounded-md cursor-pointer flex items-start gap-2.5" style="border:1px solid var(--line-2); background: var(--bg-panel)">
+                    <input type="radio" name="mode" class="mt-0.5">
+                    <div>
+                      <div class="text-[13px] font-semibold serif">直接送信する</div>
+                      <div class="text-[11px] mt-0.5" style="color:var(--txt-3)">確認なしで送信</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <div class="text-[11.5px] mb-2" style="color:var(--txt-3)">本文プレビュー（差し込みデータ）</div>
+                <div class="text-[11.5px] p-4 rounded-md mono leading-relaxed" style="background:var(--bg-soft); color:var(--txt-1); max-height:200px; overflow:auto; border:1px solid var(--line); white-space: pre-wrap">件名: 【機械設計技術部】山田 太郎 業務報告 2026/05/08
+
+お疲れ様です。山田 太郎です。
+本日の業務をご報告いたします。
+
+▼ 本日の作業内容
+1. 5/8–5/9   K-12345  ABC社 製品A  / 図面作成 / 外形図修正
+2. 5/8       K-12350  DEF社 製品B  / 検図 / 検図完了
+
+▼ 前日までの作業報告
+1. 5/7       K-12345  ABC社 製品A  / 内部レビュー対応
+
+以上、よろしくお願いいたします。</div>
+              </div>
+            </div>
+
+            <div class="px-6 py-3.5 flex items-center justify-end gap-2" style="border-top:1px solid var(--line); background:var(--bg-soft)">
+              <button class="btn-secondary">キャンセル</button>
+              <button class="btn-primary">依頼を登録する</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── footer ── -->
+        <div class="mt-14 pt-5 flex items-center justify-between text-[11px]" style="border-top: 1px solid var(--line); color:var(--txt-3)">
+          <span class="serif" style="font-style: italic">機械設計技術部 タスク管理 — v0.3</span>
+          <span class="mono">imaizumi@lineworks-local.info</span>
+        </div>
+
+      </main>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
