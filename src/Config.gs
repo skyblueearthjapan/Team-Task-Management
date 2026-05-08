@@ -124,7 +124,8 @@ const SCRIPT_PROP_KEYS = {
   KOBAN_MASTER_SHEET_NAME: 'KOBAN_MASTER_SHEET_NAME',
   POLLING_INTERVAL_SECONDS: 'POLLING_INTERVAL_SECONDS',
   WEBAPP_VERSION: 'WEBAPP_VERSION',
-  EXE_API_TOKEN: 'EXE_API_TOKEN'
+  EXE_API_TOKEN: 'EXE_API_TOKEN',
+  GEMINI_API_KEY: 'GEMINI_API_KEY'  // ユーザーが GAS Script Properties に手動登録
 };
 
 // ─── 初期データ：Settings ─────────────────────────────────
@@ -139,7 +140,9 @@ const DEFAULT_SETTINGS = [
   ['LAST_DEAD_NOTIFICATION_AT',    '',       '管理者への前回 EXE 死活通知時刻'],
   ['ADMIN_EMAIL',                  '',       'EXE 死活通知の送信先管理者メール'],
   ['CAS_TIMEOUT_MINUTES',          '10',     'MailQueue picked → pending 復旧の閾値（分）'],
-  ['EXE_DEAD_THRESHOLD_MINUTES',   '5',      'EXE 応答なしと判定する閾値（分）']
+  ['EXE_DEAD_THRESHOLD_MINUTES',   '5',      'EXE 応答なしと判定する閾値（分）'],
+  ['GEMINI_MODEL',                 'gemini-2.5-flash', 'Gemini モデル名（gemini-3-flash 等に変更可）'],
+  ['GEMINI_RATE_LIMIT_PER_MIN',    '5',      '同一スタッフあたり 1 分あたりの最大 AI 呼び出し回数']
 ];
 
 // ─── 初期データ：WorkTypes（作業内容マスタ） ──────────────
@@ -161,7 +164,7 @@ const DEFAULT_WORK_TYPES = [
 ];
 
 // ─── 初期データ：Staff（スタッフマスタ） ──────────────────
-// 機械設計技術部スタッフ約6名分の入力枠。
+// 技術部スタッフ約6名分の入力枠。
 // 各行をシート上で編集（name / email を記入）して使用する。
 const STAFF_TEMPLATE_ROWS = [
   ['staff01', '', '', 'staff', 1, true, '', ''],

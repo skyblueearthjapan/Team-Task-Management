@@ -45,7 +45,7 @@ function doGet(e) {
 
   const tpl = HtmlService.createTemplateFromFile('index');
   return tpl.evaluate()
-    .setTitle('機械設計技術部 タスク管理')
+    .setTitle('技術部タスク管理')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 

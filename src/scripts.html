@@ -1084,7 +1084,10 @@
               '<div class="text-[10.5px] mono" style="color:var(--txt-3)">' + esc(s.email || '') + '</div>' +
             '</div>' +
           '</div>' +
-          statusBadge +
+          '<div class="flex items-center gap-2">' +
+            '<button class="btn-ai-assist" data-staff-id="' + escAttr(s.id) + '" style="font-size:11px;padding:3px 8px;border:1px solid var(--line-2);border-radius:5px;background:var(--bg-panel);color:var(--txt-2);cursor:pointer;">✨ AI 補助</button>' +
+            statusBadge +
+          '</div>' +
         '</header>' +
         '<div class="px-4 py-3" style="min-width:0">' +
           '<div class="text-[11px] font-semibold mb-1.5" style="color:var(--txt-3)">本日の作業内容</div>' +
@@ -1189,6 +1192,14 @@
     _attachCardHandlers: function (s) {
       var card = document.getElementById('report-card-' + s.id);
       if (!card) return;
+
+      // ✨ AI 補助ボタン
+      var aiBtn = card.querySelector('.btn-ai-assist');
+      if (aiBtn) {
+        aiBtn.addEventListener('click', function () {
+          AiAssistModal.open(s);
+        });
+      }
 
       // 追加ボタン
       card.querySelectorAll('.row-add').forEach(function (el) {
@@ -1758,12 +1769,6 @@
         subBtn.style.opacity = staff.email ? '' : '0.5';
       }
 
-      // Issue 11: 挨拶 select の既定を「関係各位」に
-      var greetingSel = document.getElementById('modal-greeting');
-      if (greetingSel && greetingSel.value === '') {
-        greetingSel.value = '関係各位';
-      }
-
       // プレビュー（GAS API 優先、フォールバックはクライアント実装）
       this._updatePreview(staff);
     },
@@ -1798,16 +1803,9 @@
     // GAS 側 previewMailBody API のみを使う。
     // マイナス思考: フォールバック実装は本実装と整合せず、削除。
     // GAS が落ちている場合は enqueue 自体が失敗するため、プレビューも空で問題ない。
+    // 挨拶は GAS 側 buildMailBody で「関係各位」固定のためフロントからは送らない。
     _buildMailBodyPreviewAsync: function (staff) {
       var self = this;
-      var greetingSel = document.getElementById('modal-greeting');
-      var greetingCustom = document.getElementById('modal-greeting-custom');
-      var greeting = '関係各位';
-      if (greetingSel) {
-        greeting = greetingSel.value === '__custom__'
-          ? (greetingCustom ? greetingCustom.value.trim() || '関係各位' : '関係各位')
-          : (greetingSel.value || '関係各位');
-      }
 
       var sigName  = staff.signatureName  || staff.name  || '';
       var sigEmail = staff.signatureEmail || staff.email || '';
@@ -1822,7 +1820,6 @@
       var bodyVars = {
         staffName:      staff.name || '',
         reportDate:     rdSlash,
-        greeting:       greeting,
         todayItems:     self._buildItems(todayReps),
         yesterdayItems: self._buildItems(prevReps),
         signatureName:  sigName,
@@ -1901,16 +1898,7 @@
         var todayReps = reports.filter(function (r) { return r.reportDate === Store.today && r.section === 'today'; });
         var prevReps  = reports.filter(function (r) { return r.section === 'prev' || r.section === 'yesterday'; });
 
-        // Issue 11: 挨拶 select の値
-        var greetingSel = document.getElementById('modal-greeting');
-        var greetingCustom = document.getElementById('modal-greeting-custom');
-        var greeting = '関係各位';
-        if (greetingSel) {
-          greeting = greetingSel.value === '__custom__'
-            ? (greetingCustom ? greetingCustom.value.trim() || '関係各位' : '関係各位')
-            : (greetingSel.value || '関係各位');
-        }
-
+        // 挨拶は GAS 側 buildMailBody で「関係各位」固定のためフロントからは送らない（マイナス思考: 削除）
         // Issue 12: signatureName / signatureEmail フォールバック
         var sigName  = staff.signatureName  || staff.name  || '';
         var sigEmail = staff.signatureEmail || staff.email || '';
@@ -1923,7 +1911,6 @@
         var bodyVars = {
           staffName:      staff.name || '',
           reportDate:     rdSlash,
-          greeting:       greeting,
           todayItems:     this._buildItems(todayReps),
           yesterdayItems: this._buildItems(prevReps),
           signatureName:  sigName,
@@ -2027,10 +2014,418 @@
   };
 
   // ════════════════════════════════════════════════════════════════
+  // N. AiAssistModal（カード単位 AI 補助モーダル）
+  // ════════════════════════════════════════════════════════════════
+
+  var AiAssistModal = {
+    _staff: null,
+    _entries: [],
+
+    open: function (s) {
+      this._staff   = s;
+      this._entries = [];
+      var modal = document.getElementById('ai-assist-modal');
+      if (!modal) return;
+      var nameEl = document.getElementById('ai-assist-staff-name');
+      if (nameEl) nameEl.textContent = s.name || '';
+      var textEl = document.getElementById('ai-assist-text');
+      if (textEl) textEl.value = '';
+      var preview = document.getElementById('ai-assist-preview');
+      if (preview) preview.style.display = 'none';
+      modal.classList.add('open');
+      trapFocus(modal);
+    },
+
+    close: function () {
+      var modal = document.getElementById('ai-assist-modal');
+      if (modal) modal.classList.remove('open');
+      this._staff   = null;
+      this._entries = [];
+    },
+
+    parse: function () {
+      var s    = this._staff;
+      if (!s) return;
+      var text = (document.getElementById('ai-assist-text') || {}).value || '';
+      if (!text.trim()) { toast('自由文を入力してください', 'warn'); return; }
+
+      var parseBtn = document.getElementById('ai-assist-parse-btn');
+      if (parseBtn) { parseBtn.disabled = true; parseBtn.textContent = '解析中…'; }
+
+      var self = this;
+      google.script.run
+        .withSuccessHandler(function (res) {
+          if (parseBtn) { parseBtn.disabled = false; parseBtn.textContent = '解析'; }
+          if (res && res.error) {
+            AiAssistModal._handleApiError(res.error);
+            return;
+          }
+          self._entries = (res && res.entries) || [];
+          if (self._entries.length === 0) {
+            toast('解析結果が空です。文章を見直してください', 'warn');
+            return;
+          }
+          AiAssistModal._renderPreview(self._entries);
+        })
+        .withFailureHandler(function (err) {
+          if (parseBtn) { parseBtn.disabled = false; parseBtn.textContent = '解析'; }
+          AiAssistModal._handleApiError(String(err.message || err));
+        })
+        .aiParseNaturalLanguage(text, { staffId: s.id, referenceDate: Store.today });
+    },
+
+    _handleApiError: function (errMsg) {
+      if (errMsg === 'API_KEY_NOT_SET') {
+        toast('Gemini API キーが未設定です。GAS Script Properties に GEMINI_API_KEY を登録してください', 'err');
+      } else if (errMsg === 'RATE_LIMIT_EXCEEDED') {
+        toast('AI: レート制限に達しました。1分後に再試行してください', 'warn');
+      } else if (errMsg && (errMsg.indexOf('quota') !== -1 || errMsg.indexOf('429') !== -1)) {
+        toast('AI: レート制限に達しました。1分後に再試行してください', 'warn');
+      } else {
+        toast('AI エラー: ' + errMsg, 'err');
+      }
+    },
+
+    _renderPreview: function (entries) {
+      var container = document.getElementById('ai-assist-entries');
+      if (!container) return;
+      container.innerHTML = entries.map(function (e, i) {
+        var koban    = e.kobanCode    ? '<b class="mono">' + esc(e.kobanCode) + '</b> ' : '';
+        var customer = e.customer     ? esc(e.customer) + ' ' : '';
+        var product  = e.productName  ? esc(e.productName) + ' ' : '';
+        var wt = e.workTypeId ? Store.workTypes.find(function(w){return w.id === e.workTypeId;}) : null;
+        var wtype = esc(e.detail || (wt ? wt.name : ''));
+        var dur      = e.duration     ? '<span class="pill" style="font-size:10px;padding:1px 6px">' + esc(e.duration) + '</span>' : '';
+        var period   = e.periodStart
+          ? '<span class="pill" style="font-size:10px;padding:1px 6px">' + esc(String(e.periodStart).slice(5).replace('-', '/')) + (e.periodEnd && e.periodEnd !== e.periodStart ? '〜' + esc(String(e.periodEnd).slice(5).replace('-', '/')) : '') + '</span>'
+          : '';
+        var confStr  = e.confidence != null ? '<span style="color:var(--txt-3);font-size:10.5px">' + Math.round(e.confidence * 100) + '%</span>' : '';
+        return '<div style="padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg-soft);display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
+          '<span style="font-size:10.5px;color:var(--txt-3)">' + (i + 1) + '.</span>' +
+          period + dur + koban + customer + product + wtype + confStr +
+          '</div>';
+      }).join('');
+      var preview = document.getElementById('ai-assist-preview');
+      if (preview) preview.style.display = '';
+    },
+
+    // entries を report 行形式に変換してStore に追加
+    _addEntriesToReport: function (section) {
+      var s = this._staff;
+      if (!s || !this._entries.length) return;
+      if (!Store.reports[s.id]) Store.reports[s.id] = [];
+
+      this._entries.forEach(function (e) {
+        var reportDate = e.periodStart ? toYMD(parseDate(e.periodStart)) : Store.today;
+        var record = {
+          staffId:      s.id,
+          reportDate:   Store.today,
+          section:      section,
+          seq:          Date.now() + Math.floor(Math.random() * 1000),
+          kobanCode:    e.kobanCode    || '',
+          workTypeId:   e.workTypeId   || '',
+          detail:       e.detail || e.workTypeName || '',
+          duration:     e.duration     || '',
+          continued:    false,
+          periodStart:  e.periodStart  || Store.today,
+          periodEnd:    e.periodEnd    || Store.today,
+          workTypeName: e.workTypeName || '',
+          note:         e.detail || e.workTypeName || '',
+          dateRange:    (e.periodStart ? String(e.periodStart).slice(5).replace('-', '/') : Store.today.slice(5).replace('-', '/'))
+        };
+        Store.reports[s.id].push(record);
+
+        // Issue X2: duration >= 1日 の today エントリは ガント自動追加
+        if (section === 'today') {
+          ReportView._maybeAutoAddGantt(record, s.id);
+        }
+
+        SaveQueue.flushNow(record);
+      });
+
+      ReportView.render();
+      toast(this._entries.length + ' 件を追加しました', 'ok');
+      this.close();
+    },
+
+    addToGantt: function () {
+      var s = this._staff;
+      if (!s || !this._entries.length) return;
+
+      this._entries.forEach(function (e) {
+        var startDate = e.periodStart ? toYMD(parseDate(e.periodStart)) : Store.today;
+        var endDate   = e.periodEnd   ? toYMD(parseDate(e.periodEnd))   : startDate;
+
+        var newId = 'sch_' + (window.crypto && crypto.randomUUID
+          ? crypto.randomUUID().replace(/-/g, '').substring(0, 16)
+          : Math.random().toString(36).substring(2, 18));
+
+        var schRecord = {
+          id:         newId,
+          staffId:    s.id,
+          startDate:  startDate,
+          endDate:    endDate,
+          kobanCode:  e.kobanCode  || '',
+          workTypeId: e.workTypeId || '',
+          note:       e.workTypeName || e.detail || ''
+        };
+
+        Store.schedules.push(schRecord);
+        GanttView.renderBars();
+
+        google.script.run
+          .withSuccessHandler(function (serverId) {
+            if (serverId && serverId !== newId) {
+              var ex = Store.schedules.find(function (x) { return x.id === newId; });
+              if (ex) ex.id = serverId;
+            }
+            GanttView.renderBars();
+          })
+          .withFailureHandler(function (err) {
+            toast('ガント追加失敗: ' + String(err.message || err), 'warn');
+            Store.schedules = Store.schedules.filter(function (x) { return x.id !== newId; });
+            GanttView.renderBars();
+          })
+          .createSchedule(schRecord);
+      });
+
+      toast(this._entries.length + ' 件をガントに追加しました', 'ok');
+      this.close();
+    }
+  };
+
+  // ════════════════════════════════════════════════════════════════
+  // O. AiModeModal（全員対象 AI モードモーダル）
+  // ════════════════════════════════════════════════════════════════
+
+  var AiModeModal = {
+    _entries: [],
+
+    open: function () {
+      this._entries = [];
+      var modal = document.getElementById('ai-mode-modal');
+      if (!modal) return;
+
+      // スタッフ選択肢を populate
+      var staffSel = document.getElementById('ai-mode-staff');
+      if (staffSel) {
+        staffSel.innerHTML = Store.staff.map(function (s) {
+          return '<option value="' + escAttr(s.id) + '">' + esc(s.name) + '</option>';
+        }).join('');
+      }
+
+      // 基準日を今日にリセット
+      var dateEl = document.getElementById('ai-mode-date');
+      if (dateEl) dateEl.value = Store.today;
+
+      var textEl = document.getElementById('ai-mode-text');
+      if (textEl) textEl.value = '';
+
+      var preview = document.getElementById('ai-mode-preview');
+      if (preview) preview.style.display = 'none';
+
+      modal.classList.add('open');
+      trapFocus(modal);
+    },
+
+    close: function () {
+      var modal = document.getElementById('ai-mode-modal');
+      if (modal) modal.classList.remove('open');
+      this._entries = [];
+    },
+
+    parse: function () {
+      var staffSel = document.getElementById('ai-mode-staff');
+      var staffId  = staffSel ? staffSel.value : '';
+      var dateEl   = document.getElementById('ai-mode-date');
+      var refDate  = dateEl ? (dateEl.value || Store.today) : Store.today;
+      var textEl   = document.getElementById('ai-mode-text');
+      var text     = textEl ? textEl.value.trim() : '';
+
+      if (!staffId) { toast('スタッフを選択してください', 'warn'); return; }
+      if (!text)    { toast('自由文を入力してください', 'warn'); return; }
+
+      var parseBtn = document.getElementById('ai-mode-parse-btn');
+      if (parseBtn) { parseBtn.disabled = true; parseBtn.textContent = '解析中…'; }
+
+      var self = this;
+      google.script.run
+        .withSuccessHandler(function (res) {
+          if (parseBtn) { parseBtn.disabled = false; parseBtn.textContent = 'AI で解析'; }
+          if (res && res.error) {
+            AiAssistModal._handleApiError(res.error);
+            return;
+          }
+          self._entries = (res && res.entries) || [];
+          if (self._entries.length === 0) {
+            toast('解析結果が空です。文章を見直してください', 'warn');
+            return;
+          }
+          AiModeModal._renderPreview(self._entries);
+        })
+        .withFailureHandler(function (err) {
+          if (parseBtn) { parseBtn.disabled = false; parseBtn.textContent = 'AI で解析'; }
+          AiAssistModal._handleApiError(String(err.message || err));
+        })
+        .aiParseNaturalLanguage(text, { staffId: staffId, referenceDate: refDate });
+    },
+
+    _renderPreview: function (entries) {
+      var container = document.getElementById('ai-mode-entries');
+      if (!container) return;
+      container.innerHTML = entries.map(function (e, i) {
+        var koban    = e.kobanCode    ? '<b class="mono">' + esc(e.kobanCode) + '</b> ' : '';
+        var customer = e.customer     ? esc(e.customer) + ' ' : '';
+        var product  = e.productName  ? esc(e.productName) + ' ' : '';
+        var wt = e.workTypeId ? Store.workTypes.find(function(w){return w.id === e.workTypeId;}) : null;
+        var wtype = esc(e.detail || (wt ? wt.name : ''));
+        var dur      = e.duration     ? '<span class="pill" style="font-size:10px;padding:1px 6px">' + esc(e.duration) + '</span>' : '';
+        var period   = e.periodStart
+          ? '<span class="pill" style="font-size:10px;padding:1px 6px">' + esc(String(e.periodStart).slice(5).replace('-', '/')) + (e.periodEnd && e.periodEnd !== e.periodStart ? '〜' + esc(String(e.periodEnd).slice(5).replace('-', '/')) : '') + '</span>'
+          : '';
+        return '<div style="padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg-soft);display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
+          '<span style="font-size:10.5px;color:var(--txt-3)">' + (i + 1) + '.</span>' +
+          period + dur + koban + customer + product + wtype +
+          '</div>';
+      }).join('');
+      var preview = document.getElementById('ai-mode-preview');
+      if (preview) preview.style.display = '';
+    },
+
+    addToGantt: function () {
+      var staffSel = document.getElementById('ai-mode-staff');
+      var staffId  = staffSel ? staffSel.value : '';
+      if (!staffId || !this._entries.length) return;
+
+      this._entries.forEach(function (e) {
+        var startDate = e.periodStart ? toYMD(parseDate(e.periodStart)) : Store.today;
+        var endDate   = e.periodEnd   ? toYMD(parseDate(e.periodEnd))   : startDate;
+
+        var newId = 'sch_' + (window.crypto && crypto.randomUUID
+          ? crypto.randomUUID().replace(/-/g, '').substring(0, 16)
+          : Math.random().toString(36).substring(2, 18));
+
+        var schRecord = {
+          id:         newId,
+          staffId:    staffId,
+          startDate:  startDate,
+          endDate:    endDate,
+          kobanCode:  e.kobanCode  || '',
+          workTypeId: e.workTypeId || '',
+          note:       e.workTypeName || e.detail || ''
+        };
+
+        Store.schedules.push(schRecord);
+        GanttView.renderBars();
+
+        google.script.run
+          .withSuccessHandler(function (serverId) {
+            if (serverId && serverId !== newId) {
+              var ex = Store.schedules.find(function (x) { return x.id === newId; });
+              if (ex) ex.id = serverId;
+            }
+            GanttView.renderBars();
+          })
+          .withFailureHandler(function (err) {
+            toast('ガント追加失敗: ' + String(err.message || err), 'warn');
+            Store.schedules = Store.schedules.filter(function (x) { return x.id !== newId; });
+            GanttView.renderBars();
+          })
+          .createSchedule(schRecord);
+      });
+
+      toast(this._entries.length + ' 件をガントに追加しました', 'ok');
+      this.close();
+    },
+
+    addToReport: function () {
+      var staffSel = document.getElementById('ai-mode-staff');
+      var staffId  = staffSel ? staffSel.value : '';
+      if (!staffId || !this._entries.length) return;
+      if (!Store.reports[staffId]) Store.reports[staffId] = [];
+
+      this._entries.forEach(function (e) {
+        var record = {
+          staffId:      staffId,
+          reportDate:   Store.today,
+          section:      'today',
+          seq:          Date.now() + Math.floor(Math.random() * 1000),
+          kobanCode:    e.kobanCode    || '',
+          workTypeId:   e.workTypeId   || '',
+          detail:       e.detail || e.workTypeName || '',
+          duration:     e.duration     || '',
+          continued:    false,
+          periodStart:  e.periodStart  || Store.today,
+          periodEnd:    e.periodEnd    || Store.today,
+          workTypeName: e.workTypeName || '',
+          note:         e.detail || e.workTypeName || '',
+          dateRange:    (e.periodStart ? String(e.periodStart).slice(5).replace('-', '/') : Store.today.slice(5).replace('-', '/'))
+        };
+        Store.reports[staffId].push(record);
+
+        // Issue X2: duration >= 1日 はガント自動追加（today セクションのみ）
+        if (record.section === 'today') {
+          ReportView._maybeAutoAddGantt(record, staffId);
+        }
+        SaveQueue.flushNow(record);
+      });
+
+      ReportView.render();
+      toast(this._entries.length + ' 件を業務報告に追加しました', 'ok');
+      this.close();
+    }
+  };
+
+  // ════════════════════════════════════════════════════════════════
   // M. コントロール初期化
   // ════════════════════════════════════════════════════════════════
 
   function initControls() {
+    // AI 補助モーダル（カード単位）
+    var aiAssistClose = document.getElementById('ai-assist-modal-close');
+    if (aiAssistClose) aiAssistClose.addEventListener('click', function () { AiAssistModal.close(); });
+
+    var aiAssistParseBtn = document.getElementById('ai-assist-parse-btn');
+    if (aiAssistParseBtn) aiAssistParseBtn.addEventListener('click', function () { AiAssistModal.parse(); });
+
+    var aiAssistAddToday = document.getElementById('ai-assist-add-today');
+    if (aiAssistAddToday) aiAssistAddToday.addEventListener('click', function () { AiAssistModal._addEntriesToReport('today'); });
+
+    var aiAssistAddPrev = document.getElementById('ai-assist-add-prev');
+    if (aiAssistAddPrev) aiAssistAddPrev.addEventListener('click', function () { AiAssistModal._addEntriesToReport('prev'); });
+
+    var aiAssistAddGantt = document.getElementById('ai-assist-add-gantt');
+    if (aiAssistAddGantt) aiAssistAddGantt.addEventListener('click', function () { AiAssistModal.addToGantt(); });
+
+    var aiAssistModal = document.getElementById('ai-assist-modal');
+    if (aiAssistModal) {
+      aiAssistModal.addEventListener('click', function (e) { if (e.target === this) AiAssistModal.close(); });
+    }
+
+    // AI モードモーダル（全員対象）
+    var aiModeOpenBtn = document.getElementById('ai-mode-open-btn');
+    if (aiModeOpenBtn) aiModeOpenBtn.addEventListener('click', function () { AiModeModal.open(); });
+
+    var aiModeClose = document.getElementById('ai-mode-modal-close');
+    if (aiModeClose) aiModeClose.addEventListener('click', function () { AiModeModal.close(); });
+
+    var aiModeParseBtn = document.getElementById('ai-mode-parse-btn');
+    if (aiModeParseBtn) aiModeParseBtn.addEventListener('click', function () { AiModeModal.parse(); });
+
+    var aiModeAddGantt = document.getElementById('ai-mode-add-gantt');
+    if (aiModeAddGantt) aiModeAddGantt.addEventListener('click', function () { AiModeModal.addToGantt(); });
+
+    var aiModeAddReport = document.getElementById('ai-mode-add-report');
+    if (aiModeAddReport) aiModeAddReport.addEventListener('click', function () { AiModeModal.addToReport(); });
+
+    var aiModeCancel = document.getElementById('ai-mode-cancel');
+    if (aiModeCancel) aiModeCancel.addEventListener('click', function () { AiModeModal.close(); });
+
+    var aiModeModal = document.getElementById('ai-mode-modal');
+    if (aiModeModal) {
+      aiModeModal.addEventListener('click', function (e) { if (e.target === this) AiModeModal.close(); });
+    }
+
     // メールモーダル閉じる
     ['mail-modal-close', 'mail-modal-cancel'].forEach(function (id) {
       var btn = document.getElementById(id);
@@ -2060,22 +2455,6 @@
         }
       });
     });
-
-    // Issue 11: 挨拶 select で「自由入力」選択時にカスタム入力を表示
-    var greetingSel    = document.getElementById('modal-greeting');
-    var greetingCustom = document.getElementById('modal-greeting-custom');
-    if (greetingSel && greetingCustom) {
-      greetingSel.addEventListener('change', function () {
-        var show = greetingSel.value === '__custom__';
-        greetingCustom.style.display = show ? '' : 'none';
-        if (!show) greetingCustom.value = '';
-        // プレビュー更新（GAS API 優先、フォールバックはクライアント実装）
-        if (MailModal._currentStaff) MailModal._updatePreview(MailModal._currentStaff);
-      });
-      greetingCustom.addEventListener('input', function () {
-        if (MailModal._currentStaff) MailModal._updatePreview(MailModal._currentStaff);
-      });
-    }
 
     // モーダル背景クリックで閉じる
     var mailModal = document.getElementById('mail-modal');
@@ -2114,8 +2493,11 @@
 
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape') {
-        MailModal.close();
-        GanttEditModal.close();
+        // 開いているモーダルのみ閉じる
+        if (document.getElementById('mail-modal').classList.contains('open')) MailModal.close();
+        else if (document.getElementById('gantt-edit-modal').classList.contains('open')) GanttEditModal.close();
+        else if (document.getElementById('ai-assist-modal').classList.contains('open')) AiAssistModal.close();
+        else if (document.getElementById('ai-mode-modal').classList.contains('open')) AiModeModal.close();
       }
     });
   }

@@ -29,8 +29,9 @@
  *
  * extraRecipients を指定した場合、重複排除して toAddresses に追加する。
  *
- * bodyVars に greeting / staffName / todayItems / prevItems（または yesterdayItems）が含まれる場合、
+ * bodyVars に staffName / todayItems / prevItems（または yesterdayItems）が含まれる場合、
  * buildMailBody() を呼び出して fullBody を生成し bodyVars に格納する。
+ * 挨拶は buildMailBody 側で「関係各位」固定（params.greeting は無視される）。
  *
  * @param {Object} params
  *   requestedBy      {string}
@@ -41,7 +42,7 @@
  *   extraRecipients  {string|string[]} 追加宛先（省略可）
  *   ccAddresses      {string}  省略時 ''
  *   subjectVars      {Object|string}
- *   bodyVars         {Object|string}  greeting / staffName / todayItems / prevItems（または yesterdayItems）を含む場合 fullBody を自動生成
+ *   bodyVars         {Object|string}  staffName / todayItems / prevItems（または yesterdayItems）を含む場合 fullBody を自動生成（挨拶は GAS 側で「関係各位」固定）
  * @returns {{ success: true, id: string } | { success: false, reason: string }}
  */
 function enqueueMailRequest(params) {
@@ -128,9 +129,18 @@ function enqueueMailRequest(params) {
  * enqueueMailRequest から内部で呼び出されるほか、フロントエンドのプレビュー用に
  * previewMailBody() 経由でも直接呼び出し可能。
  *
+ * フォーマット仕様:
+ *   本日・前日ともに同じ構造:
+ *     1行目: 工番コード 受注先 品名（kobanCode が空の場合は省略）
+ *     2行目:    作業内容（予定工数: ...）状態語
+ *   状態語:
+ *     本日: 常に「継続中」
+ *     前日: continued=true → 「継続中」、そうでなければ「完了」
+ *   冒頭の [完了][継続] 表記は廃止。
+ *
  * @param {Object} params  bodyVars オブジェクト（または JSON 文字列）
- *   greeting          {string}  挨拶文（フロントエンドが選択）
  *   staffName         {string}  スタッフ名
+ *   （注: params.greeting は無視。挨拶は「関係各位」固定）
  *   todayItems        {Array}   本日の作業内容の配列
  *     [{ detail, duration, kobanCode, customer, productName }]
  *   prevItems         {Array}   前日までの作業報告の配列（yesterdayItems も受け付ける）
@@ -146,7 +156,8 @@ function buildMailBody(params) {
   }
   params = params || {};
 
-  var greeting    = params.greeting        || '';
+  // 挨拶は常に「関係各位」に固定（G: ユーザー追加要件 #2）
+  var greeting    = '関係各位';
   var staffName   = params.staffName       || '';
   var todayItems  = params.todayItems      || [];
   // prevItems を正式キーとし、yesterdayItems を後方互換フォールバックとして受け付ける
@@ -172,19 +183,20 @@ function buildMailBody(params) {
   // detail が空のアイテムはスキップ
   var validTodayItems = todayItems.filter(function(item) { return item.detail && String(item.detail).trim() !== ''; });
   if (validTodayItems.length > 0) {
-    var todayIdx = 0;
-    validTodayItems.forEach(function(item) {
-      todayIdx++;
-      // 1行目: 番号. 工番コード 受注先 品名（空のものは省略して余分なスペース・括弧を出さない）
+    validTodayItems.forEach(function(item, idx) {
+      // 1行目: 工番情報（kobanCode がある場合のみ出力）
       var kobanParts = [item.kobanCode, item.customer, item.productName].filter(Boolean);
-      var kobanLine  = kobanParts.length > 0 ? ' ' + kobanParts.join(' ') : '';
-      lines.push(todayIdx + '.' + kobanLine);
-      // 2行目: 作業内容（インデント付き）
-      lines.push('   ' + String(item.detail).trim());
-      // 3行目: 予定工数（duration が空の場合は出力しない）
-      if (item.duration && String(item.duration).trim() !== '') {
-        lines.push('   予定工数: ' + String(item.duration).trim());
+      if (kobanParts.length > 0) {
+        lines.push((idx + 1) + '. ' + kobanParts.join(' '));
       }
+      // 2行目: 作業内容 + （予定工数: ...） + 継続中
+      var detailStr  = String(item.detail).trim();
+      var durationStr = (item.duration && String(item.duration).trim() !== '')
+                        ? '（予定工数: ' + String(item.duration).trim() + '）'
+                        : '';
+      // kobanCode がない場合は番号を2行目に付ける
+      var prefix = kobanParts.length > 0 ? '   ' : (idx + 1) + '. ';
+      lines.push(prefix + detailStr + durationStr + ' 継続中');
       lines.push('');
     });
   } else {
@@ -199,13 +211,19 @@ function buildMailBody(params) {
   if (validPrevItems.length > 0) {
     validPrevItems.forEach(function(item, idx) {
       // continued の真偽値正規化（boolean / 'true' / 'TRUE' すべて対応）
-      var isContinued = (item.continued === true || item.continued === 'true' || item.continued === 'TRUE');
-      var statusLabel = isContinued ? '[継続]' : '[完了]';
-      // 工番情報（空のものは省略。括弧も出さない）
+      var isContinued = (item.continued === true ||
+        String(item.continued).trim().toLowerCase() === 'true');
+      var statusLabel = isContinued ? '継続中' : '完了';
+      // 1行目: 工番情報（kobanCode がある場合のみ出力）
       var kobanParts = [item.kobanCode, item.customer, item.productName].filter(Boolean);
-      var kobanSuffix = kobanParts.length > 0 ? '（' + kobanParts.join(' ') + '）' : '';
-      // 期間表示はメールでは出さない（仕様通り）
-      lines.push((idx + 1) + '. ' + statusLabel + ' ' + String(item.detail).trim() + kobanSuffix);
+      if (kobanParts.length > 0) {
+        lines.push((idx + 1) + '. ' + kobanParts.join(' '));
+      }
+      // 2行目: 作業内容 + 状態語
+      var detailStr = String(item.detail).trim();
+      var prefix = kobanParts.length > 0 ? '   ' : (idx + 1) + '. ';
+      lines.push(prefix + detailStr + ' ' + statusLabel);
+      lines.push('');
     });
   } else {
     lines.push('（なし）');

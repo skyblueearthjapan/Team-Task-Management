@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=1280">
-<title>機械設計技術部 タスク管理</title>
+<title>技術部タスク管理</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -43,19 +43,6 @@
         <div id="modal-to-addresses" class="text-[11.5px] mono px-3 py-2 rounded-md space-y-0.5" style="background:var(--bg-soft); color:var(--txt-2); border:1px solid var(--line)"></div>
       </div>
 
-      <!-- Issue 11: 挨拶選択 -->
-      <div>
-        <div class="label-sm mb-1.5">挨拶</div>
-        <div class="flex gap-2 items-center">
-          <select id="modal-greeting" class="koban-input" style="max-width:220px">
-            <option value="関係各位" selected>関係各位</option>
-            <option value="技術部 機械設計課 各位">技術部 機械設計課 各位</option>
-            <option value="皆様">皆様</option>
-            <option value="__custom__">自由入力…</option>
-          </select>
-          <input id="modal-greeting-custom" type="text" class="koban-input" placeholder="挨拶を入力" style="display:none; flex:1">
-        </div>
-      </div>
 
       <div>
         <div class="label-sm mb-1.5">送信モード</div>
@@ -86,6 +73,76 @@
     <div class="px-5 py-3 flex items-center justify-end gap-2" style="border-top:1px solid var(--line); background:var(--bg-soft)">
       <button id="mail-modal-cancel" class="btn-secondary">キャンセル</button>
       <button id="mail-modal-submit" class="btn-primary">依頼を登録する</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ AI 補助モーダル（カード単位） ═══════════════ -->
+<div id="ai-assist-modal" class="modal-overlay" role="dialog" aria-modal="true">
+  <div style="width:100%;max-width:560px" class="mx-4 modal-panel shadow-deep">
+    <div class="modal-header">
+      <span id="ai-assist-modal-title">AI 補助 — <span id="ai-assist-staff-name"></span></span>
+      <button id="ai-assist-modal-close" class="modal-close-btn">×</button>
+    </div>
+    <div class="p-4 space-y-3 text-sm">
+      <div>
+        <label class="label-sm" for="ai-assist-text">自由文</label>
+        <textarea id="ai-assist-text" rows="3"
+          placeholder="例: 明日 LW23012 構想図 3時間"
+          style="margin-top:6px;width:100%;box-sizing:border-box;font-size:var(--font-input);padding:8px 10px;border:1px solid var(--line-2);border-radius:6px;background:var(--bg-soft);color:var(--txt-1);resize:vertical;line-height:1.6;"></textarea>
+      </div>
+      <div class="flex justify-end">
+        <button id="ai-assist-parse-btn" class="btn-accent" style="padding:6px 16px;font-size:13px;">解析</button>
+      </div>
+      <div id="ai-assist-preview" style="display:none;">
+        <div class="label-sm mb-2">解析結果</div>
+        <div id="ai-assist-entries" class="space-y-2 text-[12.5px]"></div>
+        <div class="flex gap-2 mt-3 justify-end flex-wrap">
+          <button id="ai-assist-add-today" class="btn-secondary" style="padding:6px 14px;font-size:12.5px;">本日に追加</button>
+          <button id="ai-assist-add-prev"  class="btn-secondary" style="padding:6px 14px;font-size:12.5px;">前日に追加</button>
+          <button id="ai-assist-add-gantt" class="btn-secondary" style="padding:6px 14px;font-size:12.5px;">ガントに追加</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ AI モードモーダル（全員対象） ═══════════════ -->
+<div id="ai-mode-modal" class="modal-overlay" role="dialog" aria-modal="true">
+  <div style="width:100%;max-width:640px" class="mx-4 modal-panel shadow-deep">
+    <div class="modal-header">
+      <span>AI モード</span>
+      <button id="ai-mode-modal-close" class="modal-close-btn">×</button>
+    </div>
+    <div class="p-4 space-y-3 text-sm">
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="label-sm" for="ai-mode-staff">スタッフ</label>
+          <select id="ai-mode-staff" class="koban-input" style="margin-top:4px;"></select>
+        </div>
+        <div>
+          <label class="label-sm" for="ai-mode-date">基準日</label>
+          <input id="ai-mode-date" type="date" class="koban-input" style="margin-top:4px;">
+        </div>
+      </div>
+      <div>
+        <label class="label-sm" for="ai-mode-text">自由文（複数行可）</label>
+        <textarea id="ai-mode-text" rows="5"
+          placeholder="例:&#10;明日 LW23012 構想図 1日&#10;明後日 LW24001 検図 半日&#10;来週月曜 出張"
+          style="margin-top:6px;width:100%;box-sizing:border-box;font-size:var(--font-input);padding:8px 10px;border:1px solid var(--line-2);border-radius:6px;background:var(--bg-soft);color:var(--txt-1);resize:vertical;line-height:1.6;"></textarea>
+      </div>
+      <div class="flex justify-end">
+        <button id="ai-mode-parse-btn" class="btn-accent" style="padding:6px 16px;font-size:13px;">AI で解析</button>
+      </div>
+      <div id="ai-mode-preview" style="display:none;">
+        <div class="label-sm mb-2">解析結果プレビュー</div>
+        <div id="ai-mode-entries" class="space-y-2 text-[12.5px]"></div>
+        <div class="flex gap-2 mt-3 justify-end flex-wrap">
+          <button id="ai-mode-add-gantt"  class="btn-secondary" style="padding:6px 14px;font-size:12.5px;">ガントに追加</button>
+          <button id="ai-mode-add-report" class="btn-secondary" style="padding:6px 14px;font-size:12.5px;">業務報告に追加</button>
+          <button id="ai-mode-cancel"     class="btn-secondary" style="padding:6px 14px;font-size:12.5px;">キャンセル</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -150,11 +207,12 @@
   <!-- ── コンパクトヘッダ 1行 ── -->
   <header class="app-header">
     <div class="flex items-center gap-3">
-      <span class="font-semibold text-sm">機械設計技術部 タスク管理</span>
+      <span class="font-semibold text-sm">技術部タスク管理</span>
       <span id="page-date-eyebrow" class="text-[12px] mono" style="color:var(--txt-3)">— 読み込み中 —</span>
     </div>
     <div class="flex items-center gap-2 text-xs" style="color:var(--txt-3)">
       <!-- マイナス思考: ハードコードの user 表示は情報価値なく誤情報源になり得るため削除 -->
+      <button id="ai-mode-open-btn" style="font-size:11.5px;padding:3px 8px;border:1px solid var(--line-2);border-radius:5px;background:var(--bg-panel);color:var(--txt-2);cursor:pointer;">🪄 AI モード</button>
       <span id="heartbeat-dot" class="heartbeat"></span>
       <span>EXEエージェント</span>
       <span id="heartbeat-time" class="mono" style="font-size:10px">— 確認中</span>

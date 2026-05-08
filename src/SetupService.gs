@@ -33,7 +33,8 @@ function setupScriptProperties() {
     [SCRIPT_PROP_KEYS.KOBAN_MASTER_SHEET_NAME]:  '工番マスタ',
     [SCRIPT_PROP_KEYS.POLLING_INTERVAL_SECONDS]: '30',
     [SCRIPT_PROP_KEYS.WEBAPP_VERSION]:           '1.0.0',
-    [SCRIPT_PROP_KEYS.EXE_API_TOKEN]:            generateRandomToken_()
+    [SCRIPT_PROP_KEYS.EXE_API_TOKEN]:            generateRandomToken_(),
+    [SCRIPT_PROP_KEYS.GEMINI_API_KEY]:           ''  // ユーザーが後で手動設定
   };
 
   let added = 0;
