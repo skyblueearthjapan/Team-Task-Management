@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280">
+<title>機械設計技術部 タスク管理</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&family=Noto+Serif+JP:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<?!= include('styles') ?>
+</head>
+<body class="min-h-screen">
+
+<!-- Toast container -->
+<div id="toast-container"></div>
+
+<!-- ═══════════════ MAIL MODAL ═══════════════ -->
+<div id="mail-modal" class="modal-overlay" role="dialog" aria-modal="true">
+  <div class="max-w-2xl w-full mx-4 window shadow-deep">
+    <div class="titlebar">
+      <div class="flex items-center gap-2">
+        <span class="traffic r"></span>
+        <span class="traffic y"></span>
+        <span class="traffic g"></span>
+      </div>
+      <div class="ttl serif">メール送信内容の確認</div>
+      <button id="mail-modal-close" style="color:var(--txt-3); font-size:13px; background:none; border:none; cursor:pointer;">×</button>
+    </div>
+
+    <div class="p-6 space-y-5 text-sm">
+      <div class="grid grid-cols-[140px_1fr] gap-y-3 gap-x-4 items-center">
+        <span style="color:var(--txt-3)" class="text-[11.5px]">作業スタッフ</span>
+        <div class="flex items-center gap-2">
+          <div id="modal-staff-avatar" class="w-7 h-7 rounded-full grid place-items-center text-[10.5px] font-semibold text-white av-1"></div>
+          <span id="modal-staff-name" class="font-semibold"></span>
+        </div>
+
+        <span style="color:var(--txt-3)" class="text-[11.5px]">登録メールアドレス</span>
+        <span class="flex items-center gap-2">
+          <span id="modal-staff-email" class="mono text-[12.5px]"></span>
+          <span id="modal-email-match-badge" class="badge badge-sent">✓ 一致確認OK</span>
+        </span>
+      </div>
+
+      <div>
+        <div class="text-[11.5px] mb-2" style="color:var(--txt-3)">送付先 <span id="modal-to-count" class="mono"></span></div>
+        <div id="modal-to-addresses" class="text-[11.5px] mono px-3.5 py-2.5 rounded-md space-y-0.5" style="background:var(--bg-soft); color:var(--txt-2); border:1px solid var(--line)"></div>
+      </div>
+
+      <div>
+        <div class="text-[11.5px] mb-2" style="color:var(--txt-3)">送信モード</div>
+        <div class="grid grid-cols-2 gap-2.5">
+          <label id="modal-mode-draft-label" class="px-3.5 py-3 rounded-md cursor-pointer flex items-start gap-2.5" style="border:1.5px solid var(--accent); background:var(--accent-soft)">
+            <input type="radio" name="mail-mode" value="draft" checked class="mt-0.5">
+            <div>
+              <div class="text-[13px] font-semibold serif" style="color:var(--accent-2)">下書きを作成</div>
+              <div class="text-[11px] mt-0.5" style="color:var(--txt-3)">推奨 · 既定</div>
+            </div>
+          </label>
+          <label id="modal-mode-send-label" class="px-3.5 py-3 rounded-md cursor-pointer flex items-start gap-2.5" style="border:1px solid var(--line-2); background: var(--bg-panel)">
+            <input type="radio" name="mail-mode" value="send" class="mt-0.5">
+            <div>
+              <div class="text-[13px] font-semibold serif">直接送信する</div>
+              <div class="text-[11px] mt-0.5" style="color:var(--txt-3)">確認なしで送信</div>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <div>
+        <div class="text-[11.5px] mb-2" style="color:var(--txt-3)">本文プレビュー（差し込みデータ）</div>
+        <div id="modal-body-preview" class="text-[11.5px] p-4 rounded-md mono leading-relaxed" style="background:var(--bg-soft); color:var(--txt-1); max-height:200px; overflow:auto; border:1px solid var(--line); white-space: pre-wrap"></div>
+      </div>
+    </div>
+
+    <div class="px-6 py-3.5 flex items-center justify-end gap-2" style="border-top:1px solid var(--line); background:var(--bg-soft)">
+      <button id="mail-modal-cancel" class="btn-secondary">キャンセル</button>
+      <button id="mail-modal-submit" class="btn-primary">依頼を登録する</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ GANTT EDIT MODAL ═══════════════ -->
+<div id="gantt-edit-modal" class="modal-overlay" role="dialog" aria-modal="true">
+  <div class="max-w-lg w-full mx-4 window shadow-deep">
+    <div class="titlebar">
+      <div class="flex items-center gap-2">
+        <span class="traffic r"></span>
+        <span class="traffic y"></span>
+        <span class="traffic g"></span>
+      </div>
+      <div class="ttl serif" id="gantt-modal-title">スケジュール編集</div>
+      <button id="gantt-modal-close" style="color:var(--txt-3); font-size:13px; background:none; border:none; cursor:pointer;">×</button>
+    </div>
+    <div class="p-6 space-y-4 text-sm">
+      <input type="hidden" id="ge-id">
+      <input type="hidden" id="ge-staff-id">
+
+      <div class="grid grid-cols-[120px_1fr] gap-y-4 gap-x-4 items-center">
+        <label class="text-[11.5px]" style="color:var(--txt-3)">工番</label>
+        <div>
+          <input id="ge-koban" type="text" list="koban-datalist" class="koban-input" placeholder="工番を入力または選択…">
+          <datalist id="koban-datalist"></datalist>
+          <div id="ge-koban-info" class="text-[11px] mt-1" style="color:var(--txt-3)"></div>
+        </div>
+
+        <label class="text-[11.5px]" style="color:var(--txt-3)">作業内容</label>
+        <select id="ge-worktype" class="koban-input">
+          <option value="">選択…</option>
+        </select>
+
+        <label class="text-[11.5px]" style="color:var(--txt-3)">開始日</label>
+        <input id="ge-start" type="date" class="koban-input">
+
+        <label class="text-[11.5px]" style="color:var(--txt-3)">終了日</label>
+        <input id="ge-end" type="date" class="koban-input">
+
+        <label class="text-[11.5px]" style="color:var(--txt-3)">メモ</label>
+        <input id="ge-note" type="text" class="koban-input" placeholder="任意">
+      </div>
+    </div>
+    <div class="px-6 py-3.5 flex items-center justify-between gap-2" style="border-top:1px solid var(--line); background:var(--bg-soft)">
+      <button id="ge-delete" class="btn-secondary text-[12px]" style="color:var(--err); border-color:rgba(161,59,42,.3); display:none;">削除</button>
+      <div class="flex gap-2 ml-auto">
+        <button id="ge-cancel" class="btn-secondary">キャンセル</button>
+        <button id="ge-save" class="btn-primary">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ DESKTOP WINDOW SHELL ═══════════════ -->
+<div class="px-6 pt-6 pb-10">
+  <div class="window">
+
+    <!-- titlebar -->
+    <div class="titlebar">
+      <div class="flex items-center gap-2">
+        <span class="traffic r"></span>
+        <span class="traffic y"></span>
+        <span class="traffic g"></span>
+      </div>
+      <div class="ttl serif">機械設計技術部 — タスク管理</div>
+      <div class="flex items-center gap-2 text-xs" style="color:var(--txt-3)">
+        <span id="heartbeat-dot" class="heartbeat"></span>
+        <span id="heartbeat-label">EXEエージェント稼働中 <span id="heartbeat-time" class="mono" style="color:var(--txt-3); font-size:10px">— 確認中</span></span>
+      </div>
+    </div>
+
+    <!-- BODY: sidebar + main -->
+    <div class="grid" style="grid-template-columns: 232px 1fr;">
+
+      <!-- ═══════════════ SIDEBAR ═══════════════ -->
+      <aside style="background: var(--bg-soft); border-right: 1px solid var(--line); min-height: 1480px;">
+        <div class="px-4 pt-5 pb-3 flex items-center gap-3">
+          <div class="w-9 h-9 rounded-md grid place-items-center serif font-bold" style="background:var(--txt-1); color:var(--bg-panel); font-size:16px">設</div>
+          <div>
+            <div class="text-sm font-semibold serif">機械設計技術部</div>
+            <div class="text-[11px]" style="color:var(--txt-3)">タスク管理 · v0.3</div>
+          </div>
+        </div>
+
+        <div class="px-3 pt-2">
+          <div class="search">
+            <span style="font-size:13px">⌕</span>
+            <span>検索…</span>
+            <span class="kbd">⌘K</span>
+          </div>
+        </div>
+
+        <div class="nav-section">ワークスペース</div>
+        <div class="px-2 space-y-0.5">
+          <div class="nav-item active">
+            <span style="width:16px; text-align:center">▦</span>
+            <span>ガント / 日報</span>
+          </div>
+          <div class="nav-item">
+            <span style="width:16px; text-align:center">◉</span>
+            <span>本日のタスク</span>
+            <span id="sidebar-task-count" class="ml-auto text-[10px] mono" style="color:var(--txt-3)">—</span>
+          </div>
+          <div class="nav-item">
+            <span style="width:16px; text-align:center">✉</span>
+            <span>メール下書き</span>
+            <span id="sidebar-mail-pending" class="ml-auto badge badge-pending" style="padding:1px 7px; font-size:10px; display:none">0</span>
+          </div>
+          <div class="nav-item">
+            <span style="width:16px; text-align:center">◫</span>
+            <span>案件一覧</span>
+          </div>
+          <div class="nav-item">
+            <span style="width:16px; text-align:center">⊟</span>
+            <span>レポート</span>
+          </div>
+        </div>
+
+        <div class="nav-section">スタッフ</div>
+        <div id="sidebar-staff-list" class="px-2 space-y-0.5">
+          <!-- JS で描画 -->
+          <div class="nav-item"><span class="skeleton w-5 h-5 rounded-full flex-shrink-0"></span><span class="skeleton h-3 w-16 rounded"></span></div>
+        </div>
+
+        <div class="nav-section">案件</div>
+        <div id="sidebar-koban-list" class="px-2 space-y-0.5">
+          <!-- JS で描画 -->
+          <div class="nav-item"><span class="skeleton w-3 h-2.5 rounded flex-shrink-0"></span><span class="skeleton h-3 w-20 rounded"></span></div>
+        </div>
+
+        <div class="px-4 mt-6 pt-4" style="border-top: 1px solid var(--line)">
+          <div class="text-[11px]" style="color:var(--txt-3)">サインイン中</div>
+          <div class="flex items-center gap-2 mt-1.5">
+            <div class="w-7 h-7 rounded-full grid place-items-center text-[10px] font-semibold text-white av-1">IM</div>
+            <div>
+              <div class="text-[12.5px] font-medium">今泉</div>
+              <div class="text-[10.5px] mono" style="color:var(--txt-3)">imaizumi@lineworks-local.info</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- ═══════════════ MAIN ═══════════════ -->
+      <main class="px-8 pt-7 pb-10">
+
+        <!-- ── Page header ── -->
+        <div class="flex items-end justify-between mb-7">
+          <div>
+            <div id="page-date-eyebrow" class="section-eyebrow mb-2">— 読み込み中 —</div>
+            <h1 class="serif" style="font-size:32px; font-weight:600; letter-spacing:-0.015em">本日の予定 と 業務報告</h1>
+            <div id="page-sub" class="section-sub mt-1.5">読み込み中…</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button id="btn-prev-month" class="nav-btn">‹ 前月</button>
+            <button id="btn-today" class="nav-btn">本日</button>
+            <button id="btn-next-month" class="nav-btn">次月 ›</button>
+            <span class="mx-2" style="width:1px; height:24px; background:var(--line-2)"></span>
+            <select id="gantt-day-width" class="nav-btn pr-7" style="appearance:none; background-image: linear-gradient(45deg, transparent 50%, var(--txt-2) 50%), linear-gradient(135deg, var(--txt-2) 50%, transparent 50%); background-position: calc(100% - 14px) 50%, calc(100% - 10px) 50%; background-size: 4px 4px; background-repeat: no-repeat;">
+              <option value="64">標準（64px/日）</option>
+              <option value="48">狭い（48px/日）</option>
+              <option value="96">広い（96px/日）</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- ── Stats row ── -->
+        <div class="grid grid-cols-4 gap-4 mb-8">
+          <div class="panel rounded-xl px-5 py-4">
+            <div class="section-eyebrow">本日のタスク</div>
+            <div class="serif tnum mt-1.5" style="font-size:28px; font-weight:600; letter-spacing:-0.02em"><span id="kpi-tasks">—</span><span class="text-base ml-1.5" style="color:var(--txt-3); font-weight:400">件</span></div>
+            <div class="text-[11.5px] mt-0.5" id="kpi-tasks-sub" style="color:var(--txt-3)">—</div>
+          </div>
+          <div class="panel rounded-xl px-5 py-4">
+            <div class="section-eyebrow">送信待ちメール</div>
+            <div class="serif tnum mt-1.5" style="font-size:28px; font-weight:600; letter-spacing:-0.02em; color:var(--warn)"><span id="kpi-pending">—</span><span class="text-base ml-1.5" style="color:var(--txt-3); font-weight:400">件</span></div>
+            <div class="text-[11.5px] mt-0.5" id="kpi-pending-sub" style="color:var(--txt-3)">—</div>
+          </div>
+          <div class="panel rounded-xl px-5 py-4">
+            <div class="section-eyebrow">送信済</div>
+            <div class="serif tnum mt-1.5" style="font-size:28px; font-weight:600; letter-spacing:-0.02em; color:var(--ok)"><span id="kpi-sent">—</span><span class="text-base ml-1.5" style="color:var(--txt-3); font-weight:400">件</span></div>
+            <div class="text-[11.5px] mt-0.5" id="kpi-sent-sub" style="color:var(--txt-3)">—</div>
+          </div>
+          <div class="panel rounded-xl px-5 py-4">
+            <div class="section-eyebrow">要対応</div>
+            <div class="serif tnum mt-1.5" style="font-size:28px; font-weight:600; letter-spacing:-0.02em; color:var(--err)"><span id="kpi-failed">—</span><span class="text-base ml-1.5" style="color:var(--txt-3); font-weight:400">件</span></div>
+            <div id="kpi-failed-sub" class="text-[11.5px] mt-0.5" style="color:var(--err)">—</div>
+          </div>
+        </div>
+
+        <!-- ── Gantt section ── -->
+        <div class="flex items-end justify-between mb-3">
+          <div>
+            <div class="section-eyebrow mb-1">スケジュール</div>
+            <h2 class="section-title">ガントチャート</h2>
+          </div>
+          <div id="gantt-legend" class="flex flex-wrap items-center gap-x-4 gap-y-2 text-[11.5px]" style="color:var(--txt-2)">
+            <!-- JS で動的に描画 -->
+          </div>
+        </div>
+
+        <div class="gantt-wrap shadow-soft">
+          <div class="gantt-scroll" id="gantt-scroll-container">
+            <div class="gantt-table" id="gantt-table">
+              <!-- JS で描画 -->
+              <div class="gantt-staff-col" id="gantt-staff-col">
+                <div class="staff-cell header" style="height:64px">スタッフ</div>
+              </div>
+              <div class="gantt-days" id="gantt-days-grid">
+                <!-- JS で描画 -->
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="text-[11.5px] mt-3" style="color:var(--txt-3)">
+          <span class="mono">·</span> 横スクロールで連続表示
+          <span class="mono mx-2">·</span> ドラッグでバー作成
+          <span class="mono mx-2">·</span> 両端ドラッグで期間延長
+          <span class="mono mx-2">·</span> 本体ドラッグで日程移動
+          <span class="mono mx-2">·</span> ダブルクリックで詳細編集
+        </div>
+
+        <!-- ── Daily Reports ── -->
+        <div class="mt-12 mb-4 flex items-end justify-between">
+          <div>
+            <div class="section-eyebrow mb-1">作業内容 / 業務報告</div>
+            <h2 class="section-title">本日の業務報告</h2>
+          </div>
+          <div class="text-[12px]" style="color:var(--txt-3)">対象日 <span id="report-date-label" class="mono" style="color:var(--txt-2)">—</span></div>
+        </div>
+
+        <div id="report-cards-grid" class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+          <!-- JS で描画 -->
+          <div class="panel rounded-xl overflow-hidden shadow-soft" style="min-height:200px">
+            <div class="px-4 py-3 flex items-center gap-2.5">
+              <div class="skeleton w-8 h-8 rounded-full flex-shrink-0"></div>
+              <div class="space-y-1.5 flex-1">
+                <div class="skeleton h-3 w-24 rounded"></div>
+                <div class="skeleton h-2.5 w-32 rounded"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── footer ── -->
+        <div class="mt-14 pt-5 flex items-center justify-between text-[11px]" style="border-top: 1px solid var(--line); color:var(--txt-3)">
+          <span class="serif" style="font-style: italic">機械設計技術部 タスク管理 — v0.3</span>
+          <span class="mono">imaizumi@lineworks-local.info</span>
+        </div>
+
+      </main>
+    </div>
+  </div>
+</div>
+
+<?!= include('scripts') ?>
+</body>
+</html>

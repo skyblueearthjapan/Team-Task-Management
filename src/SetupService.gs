@@ -17,6 +17,7 @@ function setupAll() {
   setupScriptProperties();
   setupInitialSheets();
   setupInitialMasters();
+  seedAdminSettingsIfMissing();
   Logger.log('=== Setup complete ===');
 }
 
@@ -31,7 +32,7 @@ function setupScriptProperties() {
     [SCRIPT_PROP_KEYS.KOBAN_MASTER_SHEET_ID]:    '',
     [SCRIPT_PROP_KEYS.KOBAN_MASTER_SHEET_NAME]:  '工番マスタ',
     [SCRIPT_PROP_KEYS.POLLING_INTERVAL_SECONDS]: '30',
-    [SCRIPT_PROP_KEYS.WEBAPP_VERSION]:           '0.1.0',
+    [SCRIPT_PROP_KEYS.WEBAPP_VERSION]:           '1.0.0',
     [SCRIPT_PROP_KEYS.EXE_API_TOKEN]:            generateRandomToken_()
   };
 
@@ -51,8 +52,12 @@ function setupScriptProperties() {
  */
 function setupInitialSheets() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+  // MailQueue_Archive は archiveOldMailQueue() 初回実行時に自動生成（仕様 §11）。
+  // ここでは作成しない。スキーマは Config.gs に保持済み。
+  const SKIP_ON_SETUP = [SHEET_NAMES.MAIL_QUEUE_ARCHIVE];
 
   Object.entries(SHEET_SCHEMA).forEach(([name, headers]) => {
+    if (SKIP_ON_SETUP.includes(name)) return;
     let sheet = ss.getSheetByName(name);
     if (!sheet) {
       sheet = ss.insertSheet(name);
@@ -148,4 +153,193 @@ function resetAllSheets() {
     }
   });
   setupAll();
+}
+
+// ─── スキーマ整合性 ───────────────────────────────────────────
+
+/**
+ * 各シートのヘッダ行が SHEET_SCHEMA の定義と一致しているかを検証する。
+ * 修復は行わない（人手判断）。不一致シートの配列を返す。
+ *
+ * @returns {string[]} 不一致シート名の配列（空なら全シート正常）
+ */
+function verifySchemaIntegrity() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const mismatched = [];
+
+  Object.entries(SHEET_SCHEMA).forEach(([name, expectedHeaders]) => {
+    const sheet = ss.getSheetByName(name);
+    if (!sheet) {
+      Logger.log('[verifySchemaIntegrity] WARN: sheet not found: ' + name);
+      mismatched.push(name);
+      return;
+    }
+
+    const lastCol = sheet.getLastColumn();
+    if (lastCol < 1) {
+      Logger.log('[verifySchemaIntegrity] WARN: sheet is empty (no columns): ' + name);
+      mismatched.push(name);
+      return;
+    }
+
+    const actualHeaders = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+    if (actualHeaders.length < expectedHeaders.length) {
+      Logger.log('[verifySchemaIntegrity] WARN: column count mismatch on sheet: ' + name
+        + ' | expected: ' + expectedHeaders.length + ' | actual: ' + actualHeaders.length);
+      mismatched.push(name);
+      return;
+    }
+
+    // 期待するヘッダ列と実際の先頭 N 列を比較（N = expectedHeaders.length）
+    const isMismatch = expectedHeaders.some((h, i) => actualHeaders[i] !== h);
+    if (isMismatch) {
+      Logger.log('[verifySchemaIntegrity] WARN: header mismatch on sheet: ' + name
+        + ' | expected: ' + JSON.stringify(expectedHeaders)
+        + ' | actual: ' + JSON.stringify(actualHeaders.slice(0, expectedHeaders.length)));
+      mismatched.push(name);
+    }
+  });
+
+  if (mismatched.length === 0) {
+    Logger.log('[verifySchemaIntegrity] All sheets OK.');
+  } else {
+    Logger.log('[verifySchemaIntegrity] Mismatched sheets: ' + mismatched.join(', '));
+  }
+
+  return mismatched;
+}
+
+/**
+ * 既存シートのヘッダ列を SHEET_SCHEMA の最新定義に合わせて不足列を末尾に追加する。
+ * 列の削除・順序変更は行わない（データ破壊回避）。
+ * 既存データはそのまま保持される。
+ *
+ * 暴発防止のため confirmed=true に書き換えてから実行すること。
+ *
+ * @returns {Object} {sheetName: addedColumns[]} 形式の結果サマリ
+ */
+function migrateSchema() {
+  const confirmed = false;
+  if (!confirmed) {
+    throw new Error('migrateSchema はガードされています。コード内で confirmed=true にしてから実行してください。');
+  }
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const result = {};
+
+  Object.entries(SHEET_SCHEMA).forEach(([name, expectedHeaders]) => {
+    const sheet = ss.getSheetByName(name);
+    if (!sheet) {
+      Logger.log('[migrateSchema] sheet not found (skipped): ' + name);
+      return;
+    }
+
+    const lastCol = sheet.getLastColumn();
+    const actualHeaders = lastCol > 0
+      ? sheet.getRange(1, 1, 1, lastCol).getValues()[0]
+      : [];
+
+    const added = [];
+    expectedHeaders.forEach(h => {
+      if (!actualHeaders.includes(h) && !added.includes(h)) {
+        const newCol = sheet.getLastColumn() + 1;
+        sheet.getRange(1, newCol).setValue(h)
+          .setFontWeight('bold')
+          .setBackground(HEADER_STYLE.background)
+          .setFontColor(HEADER_STYLE.fontColor);
+        added.push(h);
+        Logger.log('[migrateSchema] Added column "' + h + '" to sheet: ' + name);
+      }
+    });
+
+    if (added.length > 0) {
+      result[name] = added;
+    }
+  });
+
+  Logger.log('[migrateSchema] Migration complete. Changed sheets: '
+    + (Object.keys(result).length > 0 ? JSON.stringify(result) : 'none'));
+  return result;
+}
+
+// ─── MailQueue_Archive 遅延生成 ───────────────────────────────
+
+/**
+ * MailQueue_Archive シートが存在しなければ作成し、ヘッダ行を整備する。
+ * 既に存在する場合は何もしない（idempotent）。
+ * MailQueueService の archiveOldMailQueue() から呼び出される想定。
+ *
+ * @returns {GoogleAppsScript.Spreadsheet.Sheet} Archive シートオブジェクト
+ */
+function createMailQueueArchiveIfMissing() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const name = SHEET_NAMES.MAIL_QUEUE_ARCHIVE;
+  let sheet = ss.getSheetByName(name);
+
+  if (sheet) {
+    Logger.log('[createMailQueueArchiveIfMissing] Already exists: ' + name);
+    return sheet;
+  }
+
+  sheet = ss.insertSheet(name);
+  Logger.log('[createMailQueueArchiveIfMissing] Created sheet: ' + name);
+
+  const headers = SHEET_SCHEMA[name];
+  if (!headers) {
+    throw new Error('[createMailQueueArchiveIfMissing] SHEET_SCHEMA missing for MailQueue_Archive');
+  }
+  sheet.getRange(1, 1, 1, headers.length)
+    .setValues([headers])
+    .setFontWeight('bold')
+    .setBackground(HEADER_STYLE.background)
+    .setFontColor(HEADER_STYLE.fontColor);
+  sheet.setFrozenRows(1);
+  sheet.autoResizeColumns(1, headers.length);
+  Logger.log('[createMailQueueArchiveIfMissing] Headers written: ' + headers.length + ' col(s)');
+
+  return sheet;
+}
+
+// ─── Settings ヘルパ ─────────────────────────────────────────
+// getSetting / setSetting は DataService.gs に集約。
+// SetupService 内では DataService の公開関数を直接呼び出す。
+
+/**
+ * DEFAULT_SETTINGS に定義されたキーのうち、まだ Settings シートに存在しない行、
+ * または value が空のキーを補完する。既存値は保護する（上書きしない）。
+ * setupInitialMasters の補強として単体でも呼び出し可能。
+ */
+function seedAdminSettingsIfMissing() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_NAMES.SETTINGS);
+  if (!sheet) {
+    Logger.log('[seedAdminSettingsIfMissing] Settings sheet not found.');
+    return;
+  }
+
+  const lastRow = sheet.getLastRow();
+  // 現在の key→rowIndex マップを構築（ヘッダ行 = 1 なので row 2 から）
+  const existingKeys = {};
+  if (lastRow >= 2) {
+    const keyData = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    keyData.forEach((r, i) => {
+      if (r[0] !== '') existingKeys[r[0]] = i + 2; // 1-indexed row
+    });
+  }
+
+  let added = 0;
+  DEFAULT_SETTINGS.forEach(([k, v, desc]) => {
+    if (existingKeys[k] !== undefined) {
+      // 既存行: 一切触らない（ユーザーが意図的にクリアした値を保護）
+      Logger.log('[seedAdminSettingsIfMissing] Key already exists (skipped): ' + k);
+    } else {
+      // 存在しない行: 末尾に追加
+      const newRow = sheet.getLastRow() + 1;
+      sheet.getRange(newRow, 1, 1, 3).setValues([[k, v, desc]]);
+      Logger.log('[seedAdminSettingsIfMissing] Added missing key: ' + k);
+      added++;
+    }
+  });
+
+  Logger.log('[seedAdminSettingsIfMissing] Done. ' + added + ' key(s) added/filled.');
 }

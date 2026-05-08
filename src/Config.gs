@@ -6,14 +6,14 @@
 
 // ─── シート名 ────────────────────────────────────────────────
 const SHEET_NAMES = {
-  SCHEDULES: 'Schedules',
-  DAILY_REPORTS: 'DailyReports',
-  MAIL_QUEUE: 'MailQueue',
-  MAIL_LOG: 'MailLog',
-  STAFF: 'Staff',
-  WORK_TYPES: 'WorkTypes',
-  HOLIDAYS: 'Holidays',
-  SETTINGS: 'Settings'
+  SCHEDULES:          'Schedules',
+  DAILY_REPORTS:      'DailyReports',
+  MAIL_QUEUE:         'MailQueue',
+  MAIL_QUEUE_ARCHIVE: 'MailQueue_Archive',
+  MAIL_LOG:           'MailLog',
+  STAFF:              'Staff',
+  WORK_TYPES:         'WorkTypes',
+  SETTINGS:           'Settings'
 };
 
 // ─── 各シートのヘッダ列定義 ─────────────────────────────────
@@ -42,6 +42,7 @@ const SHEET_SCHEMA = {
     'workTypeId',
     'detail',
     'linkedScheduleId',
+    'createdAt',
     'updatedAt'
   ],
   [SHEET_NAMES.MAIL_QUEUE]: [
@@ -52,15 +53,36 @@ const SHEET_SCHEMA = {
     'targetStaffEmail',
     'reportDate',
     'mode',              // draft / send
-    'toAddresses',
-    'ccAddresses',
-    'subjectVars',       // JSON
-    'bodyVars',          // JSON
+    'toAddresses',       // カンマ区切り string（"a@x,b@y"）。JSON 配列は使わない
+    'ccAddresses',       // v1.0 では常に空文字列。将来拡張用
+    'subjectVars',       // JSON string
+    'bodyVars',          // JSON string
     'status',            // pending / picked / drafted / sent / failed
     'pickedBy',
     'pickedAt',
     'processedAt',
     'errorMessage',
+    'previousRequestId', // 再送時に元レコード id を設定
+    'createdAt'
+  ],
+  [SHEET_NAMES.MAIL_QUEUE_ARCHIVE]: [
+    'id',
+    'requestedBy',
+    'targetStaffId',
+    'targetStaffName',
+    'targetStaffEmail',
+    'reportDate',
+    'mode',
+    'toAddresses',
+    'ccAddresses',
+    'subjectVars',
+    'bodyVars',
+    'status',
+    'pickedBy',
+    'pickedAt',
+    'processedAt',
+    'errorMessage',
+    'previousRequestId',
     'createdAt'
   ],
   [SHEET_NAMES.MAIL_LOG]: [
@@ -68,7 +90,7 @@ const SHEET_SCHEMA = {
     'mailQueueId',
     'timestamp',
     'level',             // info / warn / error
-    'event',             // picked / drafted / sent / failed / retry / mismatch
+    'event',             // picked / drafted / sent / failed / retry / mismatch / timeout_recover
     'message'
   ],
   [SHEET_NAMES.STAFF]: [
@@ -82,13 +104,8 @@ const SHEET_SCHEMA = {
   [SHEET_NAMES.WORK_TYPES]: [
     'id',
     'name',
-    'category',
     'displayOrder',
     'active'
-  ],
-  [SHEET_NAMES.HOLIDAYS]: [
-    'date',
-    'name'
   ],
   [SHEET_NAMES.SETTINGS]: [
     'key',
@@ -108,28 +125,35 @@ const SCRIPT_PROP_KEYS = {
 
 // ─── 初期データ：Settings ─────────────────────────────────
 const DEFAULT_SETTINGS = [
-  ['KOBAN_MASTER_SHEET_ID', '', '工番マスタが格納されている別ブックのスプレッドシートID（後で記入）'],
-  ['KOBAN_MASTER_SHEET_NAME', '工番マスタ', '工番マスタブック内のシート名'],
-  ['POLLING_INTERVAL_SECONDS', '30', 'ローカル EXE が MailQueue をポーリングする間隔（秒）'],
-  ['MAIL_DEFAULT_MODE', 'draft', 'メール送信モードの既定値（draft / send）'],
-  ['WEBAPP_VERSION', '0.1.0', 'WebApp バージョン'],
-  ['LAST_HEARTBEAT_TIMESTAMP', '', 'ローカル EXE からの最終ハートビート（自動更新）'],
-  ['LAST_HEARTBEAT_HOSTNAME', '', '最終ハートビートを送ってきた PC 名（自動更新）']
+  ['KOBAN_MASTER_SHEET_ID',        '',       '工番マスタ別ブックのスプレッドシートID'],
+  ['KOBAN_MASTER_SHEET_NAME',      '工番マスタ', '工番マスタブック内のシート名'],
+  ['POLLING_INTERVAL_SECONDS',     '30',     'ローカル EXE が MailQueue をポーリングする間隔（秒）'],
+  ['MAIL_DEFAULT_MODE',            'draft',  'メール送信モードの既定値（draft / send）'],
+  ['WEBAPP_VERSION',               '1.0.0',  'WebApp バージョン'],
+  ['LAST_HEARTBEAT_TIMESTAMP',     '',       'ローカル EXE からの最終ハートビート（自動更新）'],
+  ['LAST_HEARTBEAT_HOSTNAME',      '',       '最終ハートビートを送ってきた PC 名（自動更新）'],
+  ['LAST_DEAD_NOTIFICATION_AT',    '',       '管理者への前回 EXE 死活通知時刻'],
+  ['ADMIN_EMAIL',                  '',       'EXE 死活通知の送信先管理者メール'],
+  ['CAS_TIMEOUT_MINUTES',          '10',     'MailQueue picked → pending 復旧の閾値（分）'],
+  ['EXE_DEAD_THRESHOLD_MINUTES',   '5',      'EXE 応答なしと判定する閾値（分）']
 ];
 
 // ─── 初期データ：WorkTypes（作業内容マスタ） ──────────────
-// 部内で運用する想定の代表的な作業区分。後でシート上で編集可。
+// 仕様 v1.0 §3 / §6.3 確定13項目（カテゴリ分類なし・フラット・単一選択）
 const DEFAULT_WORK_TYPES = [
-  ['wt01', '図面作成',    '設計',    1,  true],
-  ['wt02', '検図',        '設計',    2,  true],
-  ['wt03', '出図',        '設計',    3,  true],
-  ['wt04', '修正対応',    '設計',    4,  true],
-  ['wt05', '打合せ',      '会議',    5,  true],
-  ['wt06', '立会',        '現場',    6,  true],
-  ['wt07', '報告書作成',  '事務',    7,  true],
-  ['wt08', '見積対応',    '事務',    8,  true],
-  ['wt09', '一般作業',    'その他',  9,  true],
-  ['wt10', '不在/休暇',   'その他', 10,  true]
+  ['wt01', '構想図作成',                 1, true],
+  ['wt02', '承認図作成',                 2, true],
+  ['wt03', 'バラシ図作成',               3, true],
+  ['wt04', '第三者チェック',             4, true],
+  ['wt05', '材料取り・仕様検討',         5, true],
+  ['wt06', '設計検討',                   6, true],
+  ['wt07', '出図準備',                   7, true],
+  ['wt08', '出荷後図面修正',             8, true],
+  ['wt09', '購入部品手配・在庫部品確認', 9, true],
+  ['wt10', '試運転調整・動作確認',      10, true],
+  ['wt11', '加工指示',                  11, true],
+  ['wt12', '現場対応・現場工事対応',    12, true],
+  ['wt13', '出張・打ち合わせ',          13, true]
 ];
 
 // ─── 初期データ：Staff（スタッフマスタ） ──────────────────

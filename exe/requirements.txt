@@ -1,0 +1,3 @@
+pywin32>=308
+requests>=2.32
+pyinstaller>=6.3.0
