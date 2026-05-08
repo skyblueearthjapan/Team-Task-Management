@@ -1125,8 +1125,9 @@
       // Issue 6/C: 操作ボタン
       var actionBtn = '';
       if (isToday) {
-        // 「📋 前日へコピー」ボタン
-        actionBtn = '<button class="btn-copy-prev" data-seq="' + escAttr(String(r.seq)) + '" data-staff-id="' + escAttr(r.staffId) + '" title="前日へコピー" style="font-size:10px;padding:2px 6px;border:1px solid var(--line-2);border-radius:4px;background:var(--bg-panel);cursor:pointer;color:var(--txt-2)">📋</button>';
+        // 「📋 前日へコピー」＋「× 削除」ボタン
+        actionBtn = '<button class="btn-copy-prev" data-seq="' + escAttr(String(r.seq)) + '" data-staff-id="' + escAttr(r.staffId) + '" title="前日へコピー" style="font-size:10px;padding:2px 6px;border:1px solid var(--line-2);border-radius:4px;background:var(--bg-panel);cursor:pointer;color:var(--txt-2)">📋</button>' +
+          '<button class="btn-del-today-row" data-seq="' + escAttr(String(r.seq)) + '" data-staff-id="' + escAttr(r.staffId) + '" title="削除" style="font-size:10px;padding:2px 6px;border:1px solid rgba(161,59,42,.3);border-radius:4px;background:var(--bg-panel);cursor:pointer;color:var(--err)">×</button>';
       } else {
         // Issue C: 継続/完了セレクト（continued フィールド）
         var isContinued = (r.continued === true || r.continued === 'true' || r.continued === 'TRUE');
@@ -1134,8 +1135,9 @@
           '<option value="false"' + (isContinued ? '' : ' selected') + '>完了</option>' +
           '<option value="true"'  + (isContinued ? ' selected' : '') + '>継続</option>' +
           '</select>';
-        // 「× 削除」ボタン
-        actionBtn = statusSel + '<button class="btn-del-row" data-seq="' + escAttr(String(r.seq)) + '" data-staff-id="' + escAttr(r.staffId) + '" title="削除" style="font-size:10px;padding:2px 6px;border:1px solid rgba(161,59,42,.3);border-radius:4px;background:var(--bg-panel);cursor:pointer;color:var(--err)">×</button>';
+        // 「↑ 本日へコピー」＋「× 削除」ボタン
+        actionBtn = statusSel + '<button class="btn-copy-to-today-row" data-seq="' + escAttr(String(r.seq)) + '" title="本日へコピー" style="font-size:10px;padding:2px 6px;border:1px solid var(--line-2);border-radius:4px;background:var(--bg-panel);cursor:pointer;color:var(--txt-2)">↑</button>' +
+          '<button class="btn-del-row" data-seq="' + escAttr(String(r.seq)) + '" data-staff-id="' + escAttr(r.staffId) + '" title="削除" style="font-size:10px;padding:2px 6px;border:1px solid rgba(161,59,42,.3);border-radius:4px;background:var(--bg-panel);cursor:pointer;color:var(--err)">×</button>';
       }
 
       return '<div class="row-line">' +
@@ -1216,7 +1218,16 @@
         btn.addEventListener('click', function () {
           var staffId = btn.dataset.staffId;
           var seq = btn.dataset.seq;
-          ReportView._deleteRow(staffId, seq);
+          ReportView._deleteRow(staffId, seq, 'prev');
+        });
+      });
+
+      // 「× 削除」ボタン（本日行）
+      card.querySelectorAll('.btn-del-today-row').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var staffId = btn.dataset.staffId;
+          var seq = btn.dataset.seq;
+          ReportView._deleteRow(staffId, seq, 'today');
         });
       });
 
@@ -1226,6 +1237,14 @@
           var staffId = btn.dataset.staffId;
           var seq = btn.dataset.seq;
           ReportView._copyToPrev(staffId, seq);
+        });
+      });
+
+      // 「↑ 本日へコピー」ボタン（前日行）
+      card.querySelectorAll('.btn-copy-to-today-row').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var seq = parseInt(btn.getAttribute('data-seq'), 10);
+          ReportView._copyToToday(s.id, seq);
         });
       });
 
@@ -1245,22 +1264,20 @@
       });
     },
 
-    // Issue 6: 前日行の削除（section='prev' 限定）
-    _deleteRow: function (staffId, seq) {
+    // Issue 6: 行削除（section='prev' または 'today'）
+    _deleteRow: function (staffId, seq, section) {
       if (!Store.reports[staffId]) return;
       Store.reports[staffId] = Store.reports[staffId].filter(function (r) {
-        // 前日セクションのみ削除（同 seq でも today セクションは保護）
         if (String(r.seq) !== String(seq)) return true;
+        if (section === 'today') return r.section !== 'today';
         return r.section !== 'prev' && r.section !== 'yesterday';
       });
       ReportView.render();
-      // バックエンドに deleteDailyReportBySeq が実装される前提で素直に呼ぶ。
-      // 失敗時はトーストで通知（サイレント失敗を排除）。
       google.script.run
         .withFailureHandler(function (err) {
           toast('行削除のサーバ反映に失敗しました: ' + String(err.message || err), 'err');
         })
-        .deleteDailyReportBySeq(staffId, Store.today, seq, 'prev');
+        .deleteDailyReportBySeq(staffId, Store.today, section, seq);
     },
 
     // Issue 6: 本日行を前日へコピー（元行は残す）
@@ -1293,6 +1310,42 @@
       Store.reports[staffId].push(newRow);
       ReportView.render();
       // FIX-7: 即時保存
+      SaveQueue.flushNow(newRow);
+    },
+
+    // 前日行を本日へコピー（元行は残す）
+    _copyToToday: function (staffId, seq) {
+      var reports = Store.reports[staffId] || [];
+      var src = reports.find(function (r) {
+        return Number(r.seq) === Number(seq) && (r.section === 'prev' || r.section === 'yesterday');
+      });
+      if (!src) return;
+      // 同 staffId / today / 同じ koban + detail で重複チェック
+      var dup = reports.find(function (r) {
+        return r.section === 'today'
+          && r.kobanCode === src.kobanCode
+          && (r.detail || '') === (src.detail || '');
+      });
+      if (dup) return;
+      var todaySeqs = reports.filter(function (r) { return r.section === 'today'; }).map(function (r) { return Number(r.seq) || 0; });
+      var newSeq = Math.max(0, ...todaySeqs) + 1;
+      var newRow = {
+        id:          'dr_' + (window.crypto && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '').substring(0, 16) : Math.random().toString(36).substring(2, 18)),
+        staffId:     staffId,
+        reportDate:  Store.today,
+        section:     'today',
+        seq:         newSeq,
+        kobanCode:   src.kobanCode  || '',
+        workTypeId:  src.workTypeId || '',
+        detail:      src.detail     || '',
+        duration:    '',
+        periodStart: Store.today,
+        periodEnd:   Store.today,
+        continued:   false
+      };
+      reports.push(newRow);
+      Store.reports[staffId] = reports;
+      ReportView.render();
       SaveQueue.flushNow(newRow);
     },
 
