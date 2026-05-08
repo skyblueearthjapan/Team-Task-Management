@@ -801,15 +801,29 @@
       document.getElementById('ge-end').value      = sch.endDate || '';
       document.getElementById('ge-note').value     = sch.note || '';
 
-      // Issue 1: 工番を select ベースに変更（GanttEditModal 内）
-      var kobanSel = document.getElementById('ge-koban-select');
-      if (kobanSel) {
-        kobanSel.innerHTML = '<option value="">（一般作業）</option>' +
+      // C: datalist パターンで工番検索コンボボックスを構築
+      var kobanDl = document.getElementById('ge-koban-datalist');
+      if (kobanDl) {
+        kobanDl.innerHTML = '<option value="（一般作業）">（一般作業）</option>' +
           Store.kobanList.map(function (k) {
-            var selected = k['工番'] === sch.kobanCode ? ' selected' : '';
-            return '<option value="' + escAttr(k['工番']) + '"' + selected + '>' +
-              esc(k['工番']) + ' — ' + esc(k['受注先'] || '') + '</option>';
+            // value に「工番コード  受注先  品名」を連結して全フィールド検索を可能にする
+            var display = k['工番'] + (k['受注先'] ? '  ' + k['受注先'] : '') + (k['品名'] ? '  ' + k['品名'] : '');
+            return '<option value="' + escAttr(display) + '"></option>';
           }).join('');
+      }
+      var kobanInput = document.getElementById('ge-koban-input');
+      if (kobanInput) {
+        // 既存の kobanCode から表示テキストを復元する
+        if (sch.kobanCode) {
+          var existingMaster = Store.kobanByCode(sch.kobanCode);
+          if (existingMaster) {
+            kobanInput.value = sch.kobanCode + (existingMaster['受注先'] ? '  ' + existingMaster['受注先'] : '') + (existingMaster['品名'] ? '  ' + existingMaster['品名'] : '');
+          } else {
+            kobanInput.value = sch.kobanCode;
+          }
+        } else {
+          kobanInput.value = '（一般作業）';
+        }
         this._updateKobanInfo(sch.kobanCode);
       }
 
@@ -840,9 +854,10 @@
     save: function () {
       var id      = document.getElementById('ge-id').value;
       var staffId = document.getElementById('ge-staff-id').value;
-      // Issue 1: ge-koban-select から取得
-      var kobanSel = document.getElementById('ge-koban-select');
-      var koban   = kobanSel ? kobanSel.value : '';
+      // C: ge-koban-input (datalist) から工番コードを抽出
+      var kobanInput = document.getElementById('ge-koban-input');
+      var kobanRaw   = kobanInput ? kobanInput.value.trim() : '';
+      var koban      = GanttEditModal._extractKobanCode(kobanRaw);
       var wt      = document.getElementById('ge-worktype').value;
       var start   = document.getElementById('ge-start').value;
       var end     = document.getElementById('ge-end').value;
@@ -929,6 +944,21 @@
       } else {
         info.textContent = '';
       }
+    },
+
+    // C: datalist の value（「工番コード  受注先  品名」形式）から先頭の工番コードを抽出
+    _extractKobanCode: function (val) {
+      if (!val || val === '（一般作業）') return '';
+      // 先頭のトークン（スペース区切り前）を工番コードとする
+      var code = val.split(/\s+/)[0].trim();
+      // マスタに存在するか確認（不正入力を除外）
+      var found = Store.kobanList.find(function (k) { return k['工番'] === code; });
+      if (!found && code) {
+        // マスタに無い工番が入力された場合、ガントモーダルの info 欄に警告を出す
+        var info = document.getElementById('ge-koban-info');
+        if (info) info.textContent = '⚠ マスタに存在しない工番です';
+      }
+      return found ? code : '';
     }
   };
 
@@ -1033,13 +1063,13 @@
         return ReportView._reportRow(r, true);
       }).join('');
       // Issue 6: 本日行に「📋 前日へコピー」ボタン付きの追加ボタン
-      todayRows += '<div class="row-line row-add" data-staff-id="' + esc(s.id) + '" data-section="today"><span class="pill">+ 追加</span><span style="color:var(--txt-3)">クリックで作業内容を追加</span><span></span></div>';
+      todayRows += '<div class="row-line row-add" data-staff-id="' + esc(s.id) + '" data-section="today"><span class="pill" style="font-size:12px;padding:3px 10px">+ 追加</span><span style="color:var(--txt-3)">クリックで作業内容を追加</span><span></span></div>';
 
       var prevRows = prevReps.map(function (r) {
         return ReportView._reportRow(r, false);
       }).join('');
       // Issue 6: 前日行に削除ボタン
-      prevRows += '<div class="row-line row-add" data-staff-id="' + esc(s.id) + '" data-section="prev"><span class="pill">+ 追加</span><span style="color:var(--txt-3)">クリックで報告を追加</span><span></span></div>';
+      prevRows += '<div class="row-line row-add" data-staff-id="' + esc(s.id) + '" data-section="prev"><span class="pill" style="font-size:12px;padding:3px 10px">+ 追加</span><span style="color:var(--txt-3)">クリックで報告を追加</span><span></span></div>';
 
       var borderStyle = mailStatus === 'pending' ? ' style="border-color:rgba(184,134,42,0.5);"'
                       : mailStatus === 'failed'  ? ' style="border-color:rgba(161,59,42,0.45);"'
@@ -1248,21 +1278,33 @@
 
       var form = document.createElement('div');
       form.className = 'inline-add-form';
-      form.style.cssText = 'display:flex; flex-direction:column; gap:6px; padding:8px; background:var(--bg-soft); border-radius:6px; margin-top:4px;';
+      form.style.cssText = 'display:flex; flex-direction:column; gap:8px; padding:10px 12px; background:var(--bg-soft); border-radius:6px; margin-top:6px;';
 
-      // Issue 1: 工番プルダウン（select ベース）
-      var kobanSel = document.createElement('select');
-      kobanSel.style.cssText = 'width:100%; box-sizing:border-box; font-size:12px; padding:4px 8px; border:1px solid var(--line-2); border-radius:4px; background:var(--bg-panel); color:var(--txt-1);';
-      kobanSel.innerHTML = '<option value="">（一般作業）</option>' +
+      // C: 工番検索コンボボックス（datalist パターン）
+      var inlineDlId = 'koban-dl-' + s.id + '-' + section;
+      var kobanDl = document.createElement('datalist');
+      kobanDl.id = inlineDlId;
+      kobanDl.innerHTML = '<option value="（一般作業）">（一般作業）</option>' +
         Store.kobanList.map(function (k) {
-          return '<option value="' + escAttr(k['工番']) + '">' + esc(k['工番']) + ' — ' + esc(k['受注先'] || '') + '</option>';
+          var display = k['工番'] + (k['受注先'] ? '  ' + k['受注先'] : '') + (k['品名'] ? '  ' + k['品名'] : '');
+          return '<option value="' + escAttr(display) + '"></option>';
         }).join('');
 
-      // Issue 1: 工番選択時に情報表示
+      var kobanSel = document.createElement('input');
+      kobanSel.type = 'text';
+      kobanSel.setAttribute('list', inlineDlId);
+      kobanSel.placeholder = '工番を検索（番号・受注先・品名）...';
+      kobanSel.autocomplete = 'off';
+      kobanSel.setAttribute('aria-label', '工番検索');
+      kobanSel.style.cssText = 'width:100%; box-sizing:border-box; font-size:var(--font-input); padding:6px 10px; border:1px solid var(--line-2); border-radius:4px; background:var(--bg-panel); color:var(--txt-1); height:var(--input-height);';
+      // kobanSel.value は「工番コード  受注先  品名」形式 → 保存時に先頭トークンを取り出す
+
       var kobanInfo = document.createElement('div');
       kobanInfo.style.cssText = 'font-size:11px; color:var(--txt-3); min-height:14px;';
-      kobanSel.addEventListener('change', function () {
-        var m = Store.kobanByCode(kobanSel.value);
+      kobanSel.addEventListener('input', function () {
+        var code = kobanSel.value.split(/\s+/)[0].trim();
+        if (code === '（一般作業）') code = '';
+        var m = code ? Store.kobanByCode(code) : null;
         if (m) {
           kobanInfo.textContent = '受注先: ' + (m['受注先'] || '—') + ' / 納入先: ' + (m['納入先'] || '—') + ' / ' + (m['品名'] || '');
         } else {
@@ -1275,7 +1317,7 @@
       durationRow.style.cssText = 'display:flex; gap:6px; align-items:center;';
 
       var durationSel = document.createElement('select');
-      durationSel.style.cssText = 'flex:0 0 auto; font-size:12px; padding:4px 8px; border:1px solid var(--line-2); border-radius:4px; background:var(--bg-panel); color:var(--txt-1);';
+      durationSel.style.cssText = 'flex:0 0 auto; font-size:var(--font-input); padding:6px 10px; border:1px solid var(--line-2); border-radius:4px; background:var(--bg-panel); color:var(--txt-1); height:var(--input-height); box-sizing:border-box;';
       durationSel.innerHTML = '<option value="">期間（任意）</option>' +
         DURATION_OPTIONS.map(function (d) {
           return '<option value="' + escAttr(d) + '">' + esc(d) + '</option>';
@@ -1285,7 +1327,7 @@
       var durationCustom = document.createElement('input');
       durationCustom.type = 'text';
       durationCustom.placeholder = '例: 午前中';
-      durationCustom.style.cssText = 'flex:1 1 auto; font-size:12px; padding:4px 8px; border:1px solid var(--line-2); border-radius:4px; background:var(--bg-panel); color:var(--txt-1); display:none;';
+      durationCustom.style.cssText = 'flex:1 1 auto; font-size:var(--font-input); padding:6px 10px; border:1px solid var(--line-2); border-radius:4px; background:var(--bg-panel); color:var(--txt-1); height:var(--input-height); box-sizing:border-box; display:none;';
 
       durationSel.addEventListener('change', function () {
         durationCustom.style.display = (durationSel.value === '__custom__') ? '' : 'none';
@@ -1300,7 +1342,7 @@
       textarea.placeholder = '作業内容（Shift+Enter で改行、Enter で保存）';
       textarea.maxLength = 500;
       textarea.rows = 3;
-      textarea.style.cssText = 'width:100%; box-sizing:border-box; font-size:12px; padding:4px 8px; border:1px solid var(--line-2); border-radius:4px; background:var(--bg-panel); color:var(--txt-1); resize:vertical; min-width:0;';
+      textarea.style.cssText = 'width:100%; box-sizing:border-box; font-size:var(--font-report); padding:8px 10px; border:1px solid var(--line-2); border-radius:4px; background:var(--bg-panel); color:var(--txt-1); resize:vertical; min-width:0; line-height:1.6;';
 
       var counter = document.createElement('div');
       counter.className = 'char-counter';
@@ -1311,16 +1353,17 @@
 
       var saveBtn = document.createElement('button');
       saveBtn.textContent = '保存';
-      saveBtn.className = 'btn-accent text-xs';
-      saveBtn.style.cssText = 'padding:4px 12px;';
+      saveBtn.className = 'btn-accent';
+      saveBtn.style.cssText = 'padding:6px 14px; font-size:13px;';
 
       var cancelBtn = document.createElement('button');
       cancelBtn.textContent = 'キャンセル';
-      cancelBtn.className = 'btn-secondary text-xs';
-      cancelBtn.style.cssText = 'padding:4px 12px;';
+      cancelBtn.className = 'btn-secondary';
+      cancelBtn.style.cssText = 'padding:6px 14px; font-size:13px;';
 
       btnRow.appendChild(cancelBtn);
       btnRow.appendChild(saveBtn);
+      form.appendChild(kobanDl);
       form.appendChild(kobanSel);
       form.appendChild(kobanInfo);
       form.appendChild(durationRow);
@@ -1340,7 +1383,14 @@
       function doSave() {
         if (form._saved) return;
         form._saved = true;
-        var koban  = kobanSel.value;
+        // C: datalist input の value から工番コードを抽出（先頭トークン）
+        var kobanRawVal = kobanSel.value.trim();
+        var koban = '';
+        if (kobanRawVal && kobanRawVal !== '（一般作業）') {
+          var kobanToken = kobanRawVal.split(/\s+/)[0].trim();
+          var kobanFound = Store.kobanList.find(function (k) { return k['工番'] === kobanToken; });
+          koban = kobanFound ? kobanToken : '';
+        }
         var wtName = textarea.value.trim();
         if (!wtName) { toast('作業内容を入力してください', 'warn'); form._saved = false; return; }
         if (wtName.length > 500) { toast('作業内容は500文字以内にしてください', 'warn'); form._saved = false; return; }
@@ -1932,11 +1982,12 @@
       });
     }
 
-    // Issue 1: ガントモーダル内の工番 select で補完情報を更新
-    var geKobanSelect = document.getElementById('ge-koban-select');
-    if (geKobanSelect) {
-      geKobanSelect.addEventListener('change', function () {
-        GanttEditModal._updateKobanInfo(this.value);
+    // C: ガントモーダル内の工番 datalist input で補完情報を更新
+    var geKobanInput = document.getElementById('ge-koban-input');
+    if (geKobanInput) {
+      geKobanInput.addEventListener('input', function () {
+        var code = GanttEditModal._extractKobanCode(this.value);
+        GanttEditModal._updateKobanInfo(code);
       });
     }
 

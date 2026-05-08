@@ -92,7 +92,7 @@
 
 <!-- ═══════════════ GANTT EDIT MODAL ═══════════════ -->
 <div id="gantt-edit-modal" class="modal-overlay" role="dialog" aria-modal="true">
-  <div class="max-w-lg w-full mx-4 modal-panel shadow-deep">
+  <div style="width:100%;max-width:640px" class="mx-4 modal-panel shadow-deep">
     <div class="modal-header">
       <span id="gantt-modal-title">スケジュール編集</span>
       <button id="gantt-modal-close" class="modal-close-btn">×</button>
@@ -101,33 +101,41 @@
       <input type="hidden" id="ge-id">
       <input type="hidden" id="ge-staff-id">
 
-      <div class="grid grid-cols-[120px_1fr] gap-y-4 gap-x-4 items-center">
-        <label class="label-sm">工番</label>
+      <div class="grid grid-cols-[120px_1fr] gap-y-5 gap-x-4 items-center">
+        <label class="label-sm" for="ge-koban-input">工番</label>
         <div>
-          <!-- Issue 1: datalist → select ベースに変更（プルダウン明示） -->
-          <select id="ge-koban-select" class="koban-input">
-            <option value="">（一般作業）</option>
-          </select>
-          <div id="ge-koban-info" class="text-[11px] mt-1" style="color:var(--txt-3)"></div>
+          <!-- C: datalist パターンで検索可能コンボボックス -->
+          <datalist id="ge-koban-datalist">
+            <option value="（一般作業）">（一般作業）</option>
+          </datalist>
+          <input
+            id="ge-koban-input"
+            type="text"
+            list="ge-koban-datalist"
+            class="koban-search-input"
+            placeholder="工番を検索（番号・受注先・品名）..."
+            autocomplete="off"
+            aria-label="工番検索">
+          <div id="ge-koban-info" class="text-[11px] mt-1.5" style="color:var(--txt-3)"></div>
         </div>
 
-        <label class="label-sm">作業内容</label>
-        <select id="ge-worktype" class="koban-input">
+        <label class="label-sm" for="ge-worktype">作業内容</label>
+        <select id="ge-worktype" class="gantt-modal-input">
           <option value="">選択…</option>
         </select>
 
-        <label class="label-sm">開始日</label>
-        <input id="ge-start" type="date" class="koban-input">
+        <label class="label-sm" for="ge-start">開始日</label>
+        <input id="ge-start" type="date" class="gantt-modal-input">
 
-        <label class="label-sm">終了日</label>
-        <input id="ge-end" type="date" class="koban-input">
+        <label class="label-sm" for="ge-end">終了日</label>
+        <input id="ge-end" type="date" class="gantt-modal-input">
 
-        <label class="label-sm">メモ</label>
-        <input id="ge-note" type="text" class="koban-input" placeholder="任意">
+        <label class="label-sm" for="ge-note">メモ</label>
+        <input id="ge-note" type="text" class="gantt-modal-input" placeholder="任意">
       </div>
     </div>
     <div class="px-5 py-3 flex items-center justify-between gap-2" style="border-top:1px solid var(--line); background:var(--bg-soft)">
-      <button id="ge-delete" class="btn-secondary text-[12px]" style="color:var(--err); border-color:rgba(161,59,42,.3); display:none;">削除</button>
+      <button id="ge-delete" class="btn-secondary" style="font-size:13px; color:var(--err); border-color:rgba(161,59,42,.3); display:none;">削除</button>
       <div class="flex gap-2 ml-auto">
         <button id="ge-cancel" class="btn-secondary">キャンセル</button>
         <button id="ge-save" class="btn-primary">保存</button>
