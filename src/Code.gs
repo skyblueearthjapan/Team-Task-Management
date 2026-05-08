@@ -17,23 +17,28 @@
 const ALLOWED_EMAIL_DOMAIN = '@lineworks-local.info';
 
 function doGet(e) {
-  // ドメイン認可チェック: lineworks-local.info テナントのユーザーのみ UI にアクセス可。
-  // WebApp の access 設定が「全員」または「全員（匿名）」になっている前提で
-  // doGet 内で実質的なドメイン制限を行う。EXE が doPost を叩けるようにするための設計。
+  // ドメイン認可チェック（ベストエフォート）:
+  //   WebApp は ANYONE_ANONYMOUS でデプロイしないと EXE の doPost が通らない。
+  //   ANYONE_ANONYMOUS の場合 Session.getActiveUser().getEmail() は常に空文字を返す
+  //   （Google のプライバシー仕様）。
+  //
+  //   よってここでは「メールが取得できた場合だけドメインを判定」する。
+  //   取得できない場合（匿名アクセスまたは取得不能な状態）は通す。
+  //   URL 自体は社内（LINE WORKS テナント）限定で配布する運用とすることで実質的に保護する。
   const userEmail = (Session.getActiveUser() && Session.getActiveUser().getEmail()) || '';
-  if (!userEmail || !endsWithDomain_(userEmail, ALLOWED_EMAIL_DOMAIN)) {
+  if (userEmail && !endsWithDomain_(userEmail, ALLOWED_EMAIL_DOMAIN)) {
     return HtmlService.createHtmlOutput(
       '<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8">' +
       '<title>アクセス権限がありません</title>' +
       '<style>body{font-family:"Yu Gothic UI","Noto Sans JP",sans-serif;' +
       'background:#f1ebe0;color:#2a2520;padding:64px;line-height:1.7;max-width:680px;margin:0 auto}' +
-      // マイナス思考: セリフ装飾を排除し sans-serif に統一
       'h1{font-size:24px;font-weight:600;margin:0 0 16px}' +
       'code{background:#fbf8f1;padding:2px 6px;border-radius:4px;border:1px solid #e1d8c5}' +
       '</style></head><body>' +
       '<h1>アクセス権限がありません</h1>' +
       '<p>本アプリは <code>' + ALLOWED_EMAIL_DOMAIN + '</code> ドメインのユーザーのみ利用できます。</p>' +
-      '<p>Google アカウントへのログインを確認のうえ、再度アクセスしてください。</p>' +
+      '<p>現在のログインアカウント: <code>' + userEmail + '</code></p>' +
+      '<p>正しいアカウントへログインしなおしてください。</p>' +
       '</body></html>'
     ).setTitle('アクセス権限がありません');
   }
