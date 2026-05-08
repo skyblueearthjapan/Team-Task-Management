@@ -12,11 +12,46 @@
  *   アクション: pickMailItem / completeMailItem / heartbeat
  */
 
+// 許可するメールドメイン（doGet UI 表示用）。
+// WebApp のアクセス権限を「全員」に設定する必要があるため、ここで明示的にドメイン制限を行う。
+const ALLOWED_EMAIL_DOMAIN = '@lineworks-local.info';
+
 function doGet(e) {
+  // ドメイン認可チェック: lineworks-local.info テナントのユーザーのみ UI にアクセス可。
+  // WebApp の access 設定が「全員」または「全員（匿名）」になっている前提で
+  // doGet 内で実質的なドメイン制限を行う。EXE が doPost を叩けるようにするための設計。
+  const userEmail = (Session.getActiveUser() && Session.getActiveUser().getEmail()) || '';
+  if (!userEmail || !endsWithDomain_(userEmail, ALLOWED_EMAIL_DOMAIN)) {
+    return HtmlService.createHtmlOutput(
+      '<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8">' +
+      '<title>アクセス権限がありません</title>' +
+      '<style>body{font-family:"Yu Gothic UI","Noto Sans JP",sans-serif;' +
+      'background:#f1ebe0;color:#2a2520;padding:64px;line-height:1.7;max-width:680px;margin:0 auto}' +
+      'h1{font-family:"Noto Serif JP",serif;font-size:28px;margin:0 0 16px}' +
+      'code{background:#fbf8f1;padding:2px 6px;border-radius:4px;border:1px solid #e1d8c5}' +
+      '</style></head><body>' +
+      '<h1>アクセス権限がありません</h1>' +
+      '<p>本アプリは <code>' + ALLOWED_EMAIL_DOMAIN + '</code> ドメインのユーザーのみ利用できます。</p>' +
+      '<p>Google アカウントへのログインを確認のうえ、再度アクセスしてください。</p>' +
+      '</body></html>'
+    ).setTitle('アクセス権限がありません');
+  }
+
   const tpl = HtmlService.createTemplateFromFile('index');
   return tpl.evaluate()
     .setTitle('機械設計技術部 タスク管理')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+/**
+ * メールアドレスが指定ドメインで終わるか判定する。
+ * @param {string} email
+ * @param {string} domain - '@example.com' 形式
+ * @returns {boolean}
+ */
+function endsWithDomain_(email, domain) {
+  if (!email || !domain) return false;
+  return String(email).toLowerCase().endsWith(String(domain).toLowerCase());
 }
 
 /**
