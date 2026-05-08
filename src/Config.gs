@@ -41,6 +41,8 @@ const SHEET_SCHEMA = {
     'kobanCode',
     'workTypeId',
     'detail',
+    'duration',          // 完了見込み（"2h" / "午前中" / "2日" 等）
+    'continued',         // 翌日継続フラグ（"true" / "false" 文字列）
     'linkedScheduleId',
     'createdAt',
     'updatedAt'
@@ -99,7 +101,9 @@ const SHEET_SCHEMA = {
     'email',
     'role',              // staff / admin
     'displayOrder',
-    'active'             // TRUE/FALSE
+    'active',            // TRUE/FALSE
+    'signatureName',     // メール署名用フルネーム（空なら name にフォールバック）
+    'signatureEmail'     // メール署名用メール（空なら email にフォールバック）
   ],
   [SHEET_NAMES.WORK_TYPES]: [
     'id',
@@ -160,12 +164,12 @@ const DEFAULT_WORK_TYPES = [
 // 機械設計技術部スタッフ約6名分の入力枠。
 // 各行をシート上で編集（name / email を記入）して使用する。
 const STAFF_TEMPLATE_ROWS = [
-  ['staff01', '', '', 'staff', 1, true],
-  ['staff02', '', '', 'staff', 2, true],
-  ['staff03', '', '', 'staff', 3, true],
-  ['staff04', '', '', 'staff', 4, true],
-  ['staff05', '', '', 'staff', 5, true],
-  ['staff06', '', '', 'admin', 6, true]
+  ['staff01', '', '', 'staff', 1, true, '', ''],
+  ['staff02', '', '', 'staff', 2, true, '', ''],
+  ['staff03', '', '', 'staff', 3, true, '', ''],
+  ['staff04', '', '', 'staff', 4, true, '', ''],
+  ['staff05', '', '', 'staff', 5, true, '', ''],
+  ['staff06', '', '', 'admin', 6, true, '', '']
 ];
 
 // ─── ヘッダ装飾用の色 ────────────────────────────────────

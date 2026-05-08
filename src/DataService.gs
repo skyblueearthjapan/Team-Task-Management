@@ -49,7 +49,7 @@ function listAll(sheetName) {
 function getById(sheetName, id, idColumn) {
   const col = idColumn || 'id';
   const rows = listAll(sheetName);
-  return rows.find(r => r[col] === id) || null;
+  return rows.find(r => String(r[col]) === String(id)) || null;
 }
 
 /**
@@ -310,10 +310,10 @@ function getSchedules(startDate, endDate) {
 
 /**
  * 新規 Schedule レコードを追加する。
- * id / createdAt / updatedAt は自動生成。
+ * id は内部で自動生成し、createdAt / updatedAt は appendRow_ が自動セットする。
  *
  * @param {Object} record - staffId, startDate, endDate, kobanCode, workTypeId, note, lane
- * @returns {string} 生成された id
+ * @returns {string} 生成された id（'sch_xxxxxxxxxxxxxxxx' 形式）
  */
 function createSchedule(record) {
   record.id = generateId_('sch');
@@ -446,4 +446,28 @@ function getSetting(key) {
  */
 function setSetting(key, value) {
   return updateRow_(SHEET_NAMES.SETTINGS, key, { value: value }, 'key');
+}
+
+/**
+ * staffId + reportDate + seq + section で DailyReport 行を特定して削除する。
+ * フロントエンドの「× 削除」ボタンから呼び出される。
+ *
+ * section 省略時は seq だけで find（後方互換）。
+ *
+ * @param {string}        staffId    - Staff.id
+ * @param {string}        reportDate - YYYY-MM-DD
+ * @param {number|string} seq        - 行番号（数値 or 文字列）
+ * @param {string}        [section]  - 'today' | 'prev' | 'yesterday'（省略可）
+ * @returns {boolean} 削除成功: true、該当なし: false
+ */
+function deleteDailyReportBySeq(staffId, reportDate, seq, section) {
+  var seqStr = String(seq);
+  var rows = getDailyReports(staffId, reportDate);
+  var target = rows.find(function(r) {
+    if (String(r.seq) !== seqStr) return false;
+    if (section && String(r.section) !== String(section)) return false;
+    return true;
+  });
+  if (!target) return false;
+  return deleteRow(SHEET_NAMES.DAILY_REPORTS, target.id);
 }

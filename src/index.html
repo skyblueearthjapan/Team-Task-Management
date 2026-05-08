@@ -43,6 +43,20 @@
         <div id="modal-to-addresses" class="text-[11.5px] mono px-3 py-2 rounded-md space-y-0.5" style="background:var(--bg-soft); color:var(--txt-2); border:1px solid var(--line)"></div>
       </div>
 
+      <!-- Issue 11: 挨拶選択 -->
+      <div>
+        <div class="label-sm mb-1.5">挨拶</div>
+        <div class="flex gap-2 items-center">
+          <select id="modal-greeting" class="koban-input" style="max-width:220px">
+            <option value="関係各位" selected>関係各位</option>
+            <option value="技術部 機械設計課 各位">技術部 機械設計課 各位</option>
+            <option value="皆様">皆様</option>
+            <option value="__custom__">自由入力…</option>
+          </select>
+          <input id="modal-greeting-custom" type="text" class="koban-input" placeholder="挨拶を入力" style="display:none; flex:1">
+        </div>
+      </div>
+
       <div>
         <div class="label-sm mb-1.5">送信モード</div>
         <div class="grid grid-cols-2 gap-2">
@@ -90,8 +104,10 @@
       <div class="grid grid-cols-[120px_1fr] gap-y-4 gap-x-4 items-center">
         <label class="label-sm">工番</label>
         <div>
-          <input id="ge-koban" type="text" list="koban-datalist" class="koban-input" placeholder="工番を入力または選択…">
-          <datalist id="koban-datalist"></datalist>
+          <!-- Issue 1: datalist → select ベースに変更（プルダウン明示） -->
+          <select id="ge-koban-select" class="koban-input">
+            <option value="">（一般作業）</option>
+          </select>
           <div id="ge-koban-info" class="text-[11px] mt-1" style="color:var(--txt-3)"></div>
         </div>
 
@@ -173,7 +189,7 @@
         <span class="section-label">業務報告</span>
       </div>
 
-      <!-- FIX-3: auto-fit で全員分確実に表示（3列固定にしない） -->
+      <!-- Issue 2: flex column で全7名を縦1列に表示 -->
       <div id="report-cards-grid" class="report-grid">
         <!-- JS で描画 -->
         <div class="panel rounded-xl overflow-hidden shadow-soft" style="min-height:160px">

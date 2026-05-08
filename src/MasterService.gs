@@ -133,6 +133,58 @@ function isWorkingDay(dateStr) {
 }
 
 /**
+ * referenceDate の前日からさかのぼって最初の稼働日を返す。
+ *
+ * 稼働日の判定は isWorkingDay() に委譲する:
+ *   - 社内カレンダーで区分='出勤土曜' → 稼働日（土曜でも）
+ *   - 社内カレンダーで区分='休日' または '祝日' → 非稼働日
+ *   - 未登録の土日 → 非稼働日
+ *   - 未登録の平日 → 稼働日
+ *
+ * 例:
+ *   2026-04-30(木) → 2026-04-28(火)  ※ 4/29 が祝日の場合
+ *   2026-05-11(月) → 2026-05-08(金)  ※ 5/9,5/10 が非稼働日の場合
+ *   2026-05-11(月) → 2026-05-09(土)  ※ 5/9 が出勤土曜の場合
+ *
+ * @param {string} referenceDate - YYYY-MM-DD 形式の基準日
+ * @returns {string} 最初の稼働日（YYYY-MM-DD）
+ * @throws {Error} 過去に稼働日が見つからない場合（365 日さかのぼっても該当なし）
+ */
+function getPreviousWorkingDay(referenceDate) {
+  var parts = String(referenceDate).split('-');
+  if (parts.length < 3) {
+    throw new Error('getPreviousWorkingDay: Invalid date format: ' + referenceDate);
+  }
+
+  // 365 日分の検索でも buildCalendarMap_ を毎回呼ばないよう、冒頭で 1 回取得
+  var calMap = buildCalendarMap_();
+
+  var cur = new Date(
+    parseInt(parts[0], 10),
+    parseInt(parts[1], 10) - 1,
+    parseInt(parts[2], 10)
+  );
+
+  for (var i = 0; i < 365; i++) {
+    cur.setDate(cur.getDate() - 1);
+    var ymd = Utilities.formatDate(cur, 'JST', 'yyyy-MM-dd');
+    var dow = cur.getDay(); // 0=日, 6=土
+    var category = calMap[ymd];
+
+    // 出勤土曜は稼働日
+    if (category === '出勤土曜') return ymd;
+    // 休日 / 祝日 は非稼働
+    if (category === '休日' || category === '祝日') continue;
+    // 未登録の土日は非稼働
+    if (dow === 0 || dow === 6) continue;
+    // それ以外（平日、未登録）は稼働日
+    return ymd;
+  }
+
+  throw new Error('getPreviousWorkingDay: 365 日以内に稼働日が見つかりません: ' + referenceDate);
+}
+
+/**
  * キャッシュを強制的に削除する（管理者用）。
  * 次回 getKobanMaster / getCompanyCalendar 呼び出し時に外部ブックから再取得する。
  */

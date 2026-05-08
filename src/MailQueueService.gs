@@ -27,15 +27,21 @@
  * toAddresses は **カンマ区切り string** で保存する（仕様 v1.0 §6.3 確定）。
  * 入力が配列の場合は join、文字列の場合はそのまま使う。
  *
+ * extraRecipients を指定した場合、重複排除して toAddresses に追加する。
+ *
+ * bodyVars に greeting / staffName / todayItems / yesterdayItems が含まれる場合、
+ * buildMailBody() を呼び出して fullBody を生成し bodyVars に格納する。
+ *
  * @param {Object} params
- *   requestedBy    {string}
- *   targetStaffId  {string}
- *   reportDate     {string}  YYYY-MM-DD
- *   mode           {string}  'draft' | 'send'（省略時 'draft'）
- *   toAddresses    {string|string[]} カンマ区切り文字列、または文字列配列
- *   ccAddresses    {string}  省略時 ''
- *   subjectVars    {Object|string}
- *   bodyVars       {Object|string}
+ *   requestedBy      {string}
+ *   targetStaffId    {string}
+ *   reportDate       {string}  YYYY-MM-DD
+ *   mode             {string}  'draft' | 'send'（省略時 'draft'）
+ *   toAddresses      {string|string[]} カンマ区切り文字列、または文字列配列
+ *   extraRecipients  {string|string[]} 追加宛先（省略可）
+ *   ccAddresses      {string}  省略時 ''
+ *   subjectVars      {Object|string}
+ *   bodyVars         {Object|string}  greeting / staffName / todayItems / yesterdayItems を含む場合 fullBody を自動生成
  * @returns {{ success: true, id: string } | { success: false, reason: string }}
  */
 function enqueueMailRequest(params) {
@@ -56,9 +62,37 @@ function enqueueMailRequest(params) {
   }
 
   // toAddresses をカンマ区切り string に正規化
-  const toAddrCsv = Array.isArray(params.toAddresses)
-    ? params.toAddresses.filter(Boolean).join(',')
-    : (params.toAddresses || '');
+  const baseAddrs = Array.isArray(params.toAddresses)
+    ? params.toAddresses.filter(Boolean)
+    : (params.toAddresses ? String(params.toAddresses).split(',').map(s => s.trim()).filter(Boolean) : []);
+
+  // extraRecipients を正規化してマージ（重複排除）
+  const extraAddrs = Array.isArray(params.extraRecipients)
+    ? params.extraRecipients.filter(Boolean)
+    : (params.extraRecipients ? String(params.extraRecipients).split(',').map(s => s.trim()).filter(Boolean) : []);
+
+  const toAddrSet = {};
+  baseAddrs.forEach(function(a) { toAddrSet[a] = true; });
+  extraAddrs.forEach(function(a) { toAddrSet[a] = true; });
+  const toAddrCsv = Object.keys(toAddrSet).join(',');
+
+  // bodyVars を Object として取得
+  let bodyVarsObj = params.bodyVars;
+  if (typeof bodyVarsObj === 'string') {
+    try { bodyVarsObj = JSON.parse(bodyVarsObj); } catch (e) { bodyVarsObj = {}; }
+  }
+  bodyVarsObj = bodyVarsObj || {};
+
+  // 署名情報を Staff マスタからフォールバック付きで設定
+  bodyVarsObj.signatureCompany = '株式会社ラインワークス';
+  bodyVarsObj.signatureName    = (staff.signatureName  || staff.name  || '');
+  bodyVarsObj.signatureEmail   = (staff.signatureEmail || staff.email || '');
+  bodyVarsObj.staffName        = bodyVarsObj.staffName || staff.name || '';
+
+  // メール本文を GAS 側で構築（todayItems / yesterdayItems がある場合）
+  if (bodyVarsObj.todayItems || bodyVarsObj.yesterdayItems) {
+    bodyVarsObj.fullBody = buildMailBody(bodyVarsObj);
+  }
 
   const record = {
     id:                generateId_('mq'),
@@ -73,9 +107,7 @@ function enqueueMailRequest(params) {
     subjectVars:       typeof params.subjectVars === 'string'
                          ? params.subjectVars
                          : JSON.stringify(params.subjectVars || {}),
-    bodyVars:          typeof params.bodyVars === 'string'
-                         ? params.bodyVars
-                         : JSON.stringify(params.bodyVars   || {}),
+    bodyVars:          JSON.stringify(bodyVarsObj),
     status:            'pending',
     pickedBy:          '',
     pickedAt:          '',
@@ -87,6 +119,114 @@ function enqueueMailRequest(params) {
 
   appendRow(SHEET_NAMES.MAIL_QUEUE, record);
   return { success: true, id: record.id };
+}
+
+// ── メール本文構築 ─────────────────────────────────────────────────
+
+/**
+ * メール本文を構築して返す。
+ * enqueueMailRequest から内部で呼び出されるほか、フロントエンドのプレビュー用に
+ * previewMailBody() 経由でも直接呼び出し可能。
+ *
+ * @param {Object} params  bodyVars オブジェクト（または JSON 文字列）
+ *   greeting          {string}  挨拶文（フロントエンドが選択）
+ *   staffName         {string}  スタッフ名
+ *   todayItems        {Array}   本日の作業内容の配列
+ *     [{ detail, duration, kobanCode, customer, productName }]
+ *   yesterdayItems    {Array}   前日までの作業報告の配列
+ *     [{ detail, kobanCode, customer, productName, continued }]
+ *   signatureCompany  {string}  署名：会社名
+ *   signatureName     {string}  署名：氏名
+ *   signatureEmail    {string}  署名：メールアドレス
+ * @returns {string} 構築済みメール本文
+ */
+function buildMailBody(params) {
+  if (typeof params === 'string') {
+    try { params = JSON.parse(params); } catch (e) { params = {}; }
+  }
+  params = params || {};
+
+  var greeting        = params.greeting        || '';
+  var staffName       = params.staffName       || '';
+  var todayItems      = params.todayItems      || [];
+  var yesterdayItems  = params.yesterdayItems  || [];
+  var sigCompany      = params.signatureCompany || '株式会社ラインワークス';
+  var sigName         = params.signatureName   || '';
+  var sigEmail        = params.signatureEmail  || '';
+
+  var lines = [];
+
+  // 挨拶
+  if (greeting) {
+    lines.push(greeting);
+    lines.push('');
+  }
+
+  lines.push('お疲れ様です。' + staffName + ' です。');
+  lines.push('本日の業務をご報告いたします。');
+  lines.push('');
+
+  // ▼ 本日の作業内容
+  lines.push('▼ 本日の作業内容');
+  if (todayItems.length > 0) {
+    todayItems.forEach(function(item, idx) {
+      var kobanPart = [item.kobanCode, item.customer, item.productName]
+        .filter(Boolean).join(' ');
+      var durationPart = item.duration ? '完了見込み: ' + item.duration : '';
+      var meta = [durationPart, kobanPart ? '（' + kobanPart + '）' : '']
+        .filter(Boolean).join('');
+      var line = (idx + 1) + '. ' + (item.detail || '');
+      if (meta) line += ' / ' + meta;
+      lines.push(line);
+    });
+  } else {
+    lines.push('（なし）');
+  }
+  lines.push('');
+
+  // ▼ 前日までの作業報告
+  lines.push('▼ 前日までの作業報告');
+  if (yesterdayItems.length > 0) {
+    yesterdayItems.forEach(function(item, idx) {
+      var kobanPart = [item.kobanCode, item.customer, item.productName]
+        .filter(Boolean).join(' ');
+      var line = (idx + 1) + '. ' + (item.detail || '');
+      if (item.continued === true || item.continued === 'true') {
+        line += ' 引き続き対応';
+      }
+      if (kobanPart) line += '（' + kobanPart + '）';
+      lines.push(line);
+    });
+  } else {
+    lines.push('（なし）');
+  }
+  lines.push('');
+
+  lines.push('以上、よろしくお願いいたします。');
+  lines.push('');
+  lines.push('-----------------------------------------------------------');
+  lines.push('               ' + sigCompany);
+  lines.push('　　　　　　　　　　' + sigName);
+  lines.push('Mail:' + sigEmail);
+  lines.push('-----------------------------------------------------------');
+
+  return lines.join('\n');
+}
+
+/**
+ * メール本文プレビューを返す（フロントエンドのモーダルプレビュー用）。
+ * 実体は buildMailBody と同じだが、enqueueMailRequest を経由せず直接呼び出し可能。
+ *
+ * @param {Object|string} params - buildMailBody と同じパラメータ
+ * @returns {{ success: true, body: string } | { success: false, reason: string }}
+ */
+function previewMailBody(params) {
+  try {
+    var body = buildMailBody(params);
+    return { success: true, body: body };
+  } catch (e) {
+    return { success: false, reason: e.message };
+  }
 }
 
 // ── atomic CAS: pending → picked ────────────────────────────────

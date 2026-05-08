@@ -216,6 +216,11 @@ function verifySchemaIntegrity() {
  *
  * 暴発防止のため confirmed=true に書き換えてから実行すること。
  *
+ * @note 列追加は末尾に行うため、SHEET_SCHEMA の論理順と物理順が
+ *       異なる場合がある（既存データを保持するため）。
+ *       理想的な列順への再構成が必要な場合は、setupAll を空シートで
+ *       再実行する手順を運用ドキュメントで明示する。
+ *       移行後は verifySchemaIntegrity() で WARN が出る場合がある。
  * @returns {Object} {sheetName: addedColumns[]} 形式の結果サマリ
  */
 function migrateSchema() {
