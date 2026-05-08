@@ -3,11 +3,15 @@
  *
  * GAS エディタで `setupAll()` を実行すると、バインドされたスプレッドシートに
  * 必要なシート・ヘッダ・初期マスタデータ・スクリプトプロパティが一括投入される。
+ * migrateSchema() と fixDateColumnsToText() も自動実行されるため、
+ * ユーザーが手動でフラグを書き換える必要はない。
  *
  * 個別関数も用意しているので、再実行時は段階的に呼び出すこともできる:
- *   - setupScriptProperties() : スクリプトプロパティの初期投入
- *   - setupInitialSheets()    : シートとヘッダ行の作成
- *   - setupInitialMasters()   : Settings / WorkTypes / Staff の初期行投入
+ *   - setupScriptProperties()  : スクリプトプロパティの初期投入
+ *   - setupInitialSheets()     : シートとヘッダ行の作成
+ *   - setupInitialMasters()    : Settings / WorkTypes / Staff の初期行投入
+ *   - migrateSchema()          : 不足列を末尾に追加（冪等）
+ *   - fixDateColumnsToText()   : Date 型セルを YYYY-MM-DD テキストに変換（冪等）
  *
  * 既存シート・既存データは保護される（上書きしない）。完全リセットしたい場合は
  * resetAllSheets() を使用する（コード内で明示的にガードを外す必要あり）。
@@ -17,6 +21,11 @@ function setupAll() {
   setupScriptProperties();
   setupInitialSheets();
   setupInitialMasters();
+  // スキーマが拡張されていれば物理シートに新列を追加（冪等）
+  migrateSchema();
+  // 既存の Date 型セルがあれば YYYY-MM-DD テキストに変換（冪等）
+  fixDateColumnsToText();
+  // 死活監視管理者メール等のシード（既存値は保護）
   seedAdminSettingsIfMissing();
   Logger.log('=== Setup complete ===');
 }
@@ -218,7 +227,8 @@ function verifySchemaIntegrity() {
  * 列の削除・順序変更は行わない（データ破壊回避）。
  * 既存データはそのまま保持される。
  *
- * 暴発防止のため confirmed=true に書き換えてから実行すること。
+ * 冪等: 既に存在する列はスキップするため、何度実行しても安全。
+ * setupAll() から自動呼び出しされるため、ユーザーが直接実行する必要はない。
  *
  * @note 列追加は末尾に行うため、SHEET_SCHEMA の論理順と物理順が
  *       異なる場合がある（既存データを保持するため）。
@@ -228,11 +238,6 @@ function verifySchemaIntegrity() {
  * @returns {Object} {sheetName: addedColumns[]} 形式の結果サマリ
  */
 function migrateSchema() {
-  const confirmed = false;
-  if (!confirmed) {
-    throw new Error('migrateSchema はガードされています。コード内で confirmed=true にしてから実行してください。');
-  }
-
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const result = {};
 
@@ -387,15 +392,11 @@ function applyDateColumnFormat_(sheet, sheetName) {
  * Date 型として保存されている日付セルを YYYY-MM-DD のテキストに変換し、
  * 列書式をテキストに設定する。
  *
- * 既存データがある状態で日付フィルタが効かないバグの後方移行用。
- * GAS エディタで confirmed = true に書き換えてから実行すること。
+ * 冪等: 既にテキスト型のセルはスキップするため、何度実行しても安全。
+ * 変換が発生したセルのみ再書き込みを行い、無駄な書き込みを避ける。
+ * setupAll() から自動呼び出しされるため、ユーザーが直接実行する必要はない。
  */
 function fixDateColumnsToText() {
-  var confirmed = false;
-  if (!confirmed) {
-    throw new Error('fixDateColumnsToText はガード中です。confirmed=true にしてから実行してください。');
-  }
-
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var dateColumnsMap = {
     'Schedules':    ['startDate', 'endDate'],
@@ -417,17 +418,22 @@ function fixDateColumnsToText() {
       if (idx === -1) return;
       var range = sheet.getRange(2, idx + 1, lastRow - 1, 1);
       var values = range.getValues();
+      var changed = false;
       var converted = values.map(function(row) {
         var v = row[0];
         if (v instanceof Date) {
+          changed = true;
           return [Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd')];
         }
         return [v];
       });
-      // 書式をテキストに設定 → 値を再書き込み
+      // 書式は常にテキストに（コスト軽微）
       range.setNumberFormat('@STRING@');
-      range.setValues(converted);
-      Logger.log('[fixDateColumnsToText] Converted col "' + colName + '" in ' + sheetName);
+      // 値は変換が発生したときのみ書き直す（無駄な書き込みを避ける）
+      if (changed) {
+        range.setValues(converted);
+        Logger.log('[fixDateColumnsToText] converted Date cells in ' + sheetName + '.' + colName);
+      }
     });
   });
   Logger.log('fixDateColumnsToText complete');
