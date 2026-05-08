@@ -192,7 +192,7 @@ function findRowIndex_(sheet, idColumn, idValue) {
 
 /**
  * 新規行を追加する内部ヘルパ。
- * SHEET_SCHEMA の列順に従い objectToRow_ で展開して appendRow する。
+ * 物理シートのヘッダ行から実際の列順を取得して appendRow する。
  * createdAt / updatedAt の自動セットもここで行う。
  *
  * @param {string} sheetName
@@ -204,20 +204,28 @@ function appendRow_(sheetName, record) {
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) throw new Error('DataService.appendRow_: Sheet not found: ' + sheetName);
 
-  // SHEET_SCHEMA から列順を取得する
-  const schema = SHEET_SCHEMA[sheetName];
-  if (!schema) throw new Error('DataService.appendRow_: No schema defined for: ' + sheetName);
+  // 物理シートのヘッダ行から実際の列順を取得する。
+  // SHEET_SCHEMA の論理列順を使うと、migrateSchema で末尾追加された新列との
+  // 物理位置不整合により列ズレが発生するため、必ず物理順で書く。
+  const lastCol = sheet.getLastColumn();
+  if (lastCol === 0) throw new Error('DataService.appendRow_: Sheet has no header: ' + sheetName);
+  const physicalHeaders = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
 
-  // 監査列の自動セット（createdAt / updatedAt）
+  // 監査列の自動セット（物理ヘッダで判定）
   const now = nowIso_();
-  if (schema.indexOf('createdAt') !== -1 && !record.createdAt) {
+  if (physicalHeaders.indexOf('createdAt') !== -1 && !record.createdAt) {
     record.createdAt = now;
   }
-  if (schema.indexOf('updatedAt') !== -1 && !record.updatedAt) {
+  if (physicalHeaders.indexOf('updatedAt') !== -1 && !record.updatedAt) {
     record.updatedAt = record.createdAt || now;
   }
 
-  const row = objectToRow_(schema, record);
+  // 物理列順で値を配列化（record に無いキーは空文字、record にあって物理に無いキーは捨てる）
+  const row = physicalHeaders.map(function(h) {
+    var v = record[h];
+    return v == null ? '' : v;
+  });
+
   sheet.appendRow(row);
   return record.id;
 }
