@@ -80,6 +80,9 @@ function setupInitialSheets() {
       sheet.autoResizeColumns(1, headers.length);
       Logger.log('  → headers written: ' + headers.length + ' col(s)');
     }
+
+    // 日付列にテキスト書式を適用する（Google Sheets の自動 Date 変換を防ぐ）
+    applyDateColumnFormat_(sheet, name);
   });
 
   // 初回作成時の "シート1" / "Sheet1" を片付ける
@@ -347,4 +350,84 @@ function seedAdminSettingsIfMissing() {
   });
 
   Logger.log('[seedAdminSettingsIfMissing] Done. ' + added + ' key(s) added/filled.');
+}
+
+// ─── 日付列テキスト書式 ──────────────────────────────────────
+
+/**
+ * 指定シートの日付列に '@STRING@'（テキスト）書式を適用する。
+ * Google Sheets が日付文字列を Date 型として自動変換する問題を防ぐ。
+ * setupInitialSheets() のループ内から呼び出される。
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet     - 対象シートオブジェクト
+ * @param {string}                             sheetName - SHEET_NAMES に対応したシート名
+ */
+function applyDateColumnFormat_(sheet, sheetName) {
+  var dateColumnsMap = {
+    'Schedules':    ['startDate', 'endDate'],
+    'DailyReports': ['reportDate', 'periodStart', 'periodEnd'],
+    'MailQueue':    ['reportDate']
+  };
+  var cols = dateColumnsMap[sheetName];
+  if (!cols) return;
+  var headers = SHEET_SCHEMA[sheetName];
+  if (!headers) return;
+  cols.forEach(function(colName) {
+    var idx = headers.indexOf(colName);
+    if (idx === -1) return;
+    // 1-indexed の列番号で最大 10000 行にテキスト書式を適用（ヘッダ行を除く 2 行目から）
+    sheet.getRange(2, idx + 1, 10000, 1).setNumberFormat('@STRING@');
+    Logger.log('  → setNumberFormat(@STRING@) on col "' + colName + '" in ' + sheetName);
+  });
+}
+
+/**
+ * 既存の Schedules / DailyReports / MailQueue シートで、
+ * Date 型として保存されている日付セルを YYYY-MM-DD のテキストに変換し、
+ * 列書式をテキストに設定する。
+ *
+ * 既存データがある状態で日付フィルタが効かないバグの後方移行用。
+ * GAS エディタで confirmed = true に書き換えてから実行すること。
+ */
+function fixDateColumnsToText() {
+  var confirmed = false;
+  if (!confirmed) {
+    throw new Error('fixDateColumnsToText はガード中です。confirmed=true にしてから実行してください。');
+  }
+
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var dateColumnsMap = {
+    'Schedules':    ['startDate', 'endDate'],
+    'DailyReports': ['reportDate', 'periodStart', 'periodEnd'],
+    'MailQueue':    ['reportDate']
+  };
+
+  Object.keys(dateColumnsMap).forEach(function(sheetName) {
+    var sheet = ss.getSheetByName(sheetName);
+    if (!sheet) return;
+    var headers = SHEET_SCHEMA[sheetName];
+    if (!headers) return;
+    var cols = dateColumnsMap[sheetName];
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) return;
+
+    cols.forEach(function(colName) {
+      var idx = headers.indexOf(colName);
+      if (idx === -1) return;
+      var range = sheet.getRange(2, idx + 1, lastRow - 1, 1);
+      var values = range.getValues();
+      var converted = values.map(function(row) {
+        var v = row[0];
+        if (v instanceof Date) {
+          return [Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd')];
+        }
+        return [v];
+      });
+      // 書式をテキストに設定 → 値を再書き込み
+      range.setNumberFormat('@STRING@');
+      range.setValues(converted);
+      Logger.log('[fixDateColumnsToText] Converted col "' + colName + '" in ' + sheetName);
+    });
+  });
+  Logger.log('fixDateColumnsToText complete');
 }

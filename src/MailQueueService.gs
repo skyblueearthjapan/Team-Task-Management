@@ -29,7 +29,7 @@
  *
  * extraRecipients を指定した場合、重複排除して toAddresses に追加する。
  *
- * bodyVars に greeting / staffName / todayItems / yesterdayItems が含まれる場合、
+ * bodyVars に greeting / staffName / todayItems / prevItems（または yesterdayItems）が含まれる場合、
  * buildMailBody() を呼び出して fullBody を生成し bodyVars に格納する。
  *
  * @param {Object} params
@@ -41,7 +41,7 @@
  *   extraRecipients  {string|string[]} 追加宛先（省略可）
  *   ccAddresses      {string}  省略時 ''
  *   subjectVars      {Object|string}
- *   bodyVars         {Object|string}  greeting / staffName / todayItems / yesterdayItems を含む場合 fullBody を自動生成
+ *   bodyVars         {Object|string}  greeting / staffName / todayItems / prevItems（または yesterdayItems）を含む場合 fullBody を自動生成
  * @returns {{ success: true, id: string } | { success: false, reason: string }}
  */
 function enqueueMailRequest(params) {
@@ -89,8 +89,8 @@ function enqueueMailRequest(params) {
   bodyVarsObj.signatureEmail   = (staff.signatureEmail || staff.email || '');
   bodyVarsObj.staffName        = bodyVarsObj.staffName || staff.name || '';
 
-  // メール本文を GAS 側で構築（todayItems / yesterdayItems がある場合）
-  if (bodyVarsObj.todayItems || bodyVarsObj.yesterdayItems) {
+  // メール本文を GAS 側で構築（todayItems / prevItems / yesterdayItems がある場合）
+  if (bodyVarsObj.todayItems || bodyVarsObj.prevItems || bodyVarsObj.yesterdayItems) {
     bodyVarsObj.fullBody = buildMailBody(bodyVarsObj);
   }
 
@@ -133,7 +133,7 @@ function enqueueMailRequest(params) {
  *   staffName         {string}  スタッフ名
  *   todayItems        {Array}   本日の作業内容の配列
  *     [{ detail, duration, kobanCode, customer, productName }]
- *   yesterdayItems    {Array}   前日までの作業報告の配列
+ *   prevItems         {Array}   前日までの作業報告の配列（yesterdayItems も受け付ける）
  *     [{ detail, kobanCode, customer, productName, continued }]
  *   signatureCompany  {string}  署名：会社名
  *   signatureName     {string}  署名：氏名
@@ -146,13 +146,14 @@ function buildMailBody(params) {
   }
   params = params || {};
 
-  var greeting        = params.greeting        || '';
-  var staffName       = params.staffName       || '';
-  var todayItems      = params.todayItems      || [];
-  var yesterdayItems  = params.yesterdayItems  || [];
-  var sigCompany      = params.signatureCompany || '株式会社ラインワークス';
-  var sigName         = params.signatureName   || '';
-  var sigEmail        = params.signatureEmail  || '';
+  var greeting    = params.greeting        || '';
+  var staffName   = params.staffName       || '';
+  var todayItems  = params.todayItems      || [];
+  // prevItems を正式キーとし、yesterdayItems を後方互換フォールバックとして受け付ける
+  var prevItems   = params.prevItems       || params.yesterdayItems || [];
+  var sigCompany  = params.signatureCompany || '株式会社ラインワークス';
+  var sigName     = params.signatureName   || '';
+  var sigEmail    = params.signatureEmail  || '';
 
   var lines = [];
 
@@ -168,34 +169,43 @@ function buildMailBody(params) {
 
   // ▼ 本日の作業内容
   lines.push('▼ 本日の作業内容');
-  if (todayItems.length > 0) {
-    todayItems.forEach(function(item, idx) {
-      var kobanPart = [item.kobanCode, item.customer, item.productName]
-        .filter(Boolean).join(' ');
-      var durationPart = item.duration ? '完了見込み: ' + item.duration : '';
-      var meta = [durationPart, kobanPart ? '（' + kobanPart + '）' : '']
-        .filter(Boolean).join('');
-      var line = (idx + 1) + '. ' + (item.detail || '');
-      if (meta) line += ' / ' + meta;
-      lines.push(line);
+  // detail が空のアイテムはスキップ
+  var validTodayItems = todayItems.filter(function(item) { return item.detail && String(item.detail).trim() !== ''; });
+  if (validTodayItems.length > 0) {
+    var todayIdx = 0;
+    validTodayItems.forEach(function(item) {
+      todayIdx++;
+      // 1行目: 番号. 工番コード 受注先 品名（空のものは省略して余分なスペース・括弧を出さない）
+      var kobanParts = [item.kobanCode, item.customer, item.productName].filter(Boolean);
+      var kobanLine  = kobanParts.length > 0 ? ' ' + kobanParts.join(' ') : '';
+      lines.push(todayIdx + '.' + kobanLine);
+      // 2行目: 作業内容（インデント付き）
+      lines.push('   ' + String(item.detail).trim());
+      // 3行目: 予定工数（duration が空の場合は出力しない）
+      if (item.duration && String(item.duration).trim() !== '') {
+        lines.push('   予定工数: ' + String(item.duration).trim());
+      }
+      lines.push('');
     });
   } else {
     lines.push('（なし）');
+    lines.push('');
   }
-  lines.push('');
 
   // ▼ 前日までの作業報告
   lines.push('▼ 前日までの作業報告');
-  if (yesterdayItems.length > 0) {
-    yesterdayItems.forEach(function(item, idx) {
-      var kobanPart = [item.kobanCode, item.customer, item.productName]
-        .filter(Boolean).join(' ');
-      var line = (idx + 1) + '. ' + (item.detail || '');
-      if (item.continued === true || item.continued === 'true') {
-        line += ' 引き続き対応';
-      }
-      if (kobanPart) line += '（' + kobanPart + '）';
-      lines.push(line);
+  // detail が空のアイテムはスキップ
+  var validPrevItems = prevItems.filter(function(item) { return item.detail && String(item.detail).trim() !== ''; });
+  if (validPrevItems.length > 0) {
+    validPrevItems.forEach(function(item, idx) {
+      // continued の真偽値正規化（boolean / 'true' / 'TRUE' すべて対応）
+      var isContinued = (item.continued === true || item.continued === 'true' || item.continued === 'TRUE');
+      var statusLabel = isContinued ? '[継続]' : '[完了]';
+      // 工番情報（空のものは省略。括弧も出さない）
+      var kobanParts = [item.kobanCode, item.customer, item.productName].filter(Boolean);
+      var kobanSuffix = kobanParts.length > 0 ? '（' + kobanParts.join(' ') + '）' : '';
+      // 期間表示はメールでは出さない（仕様通り）
+      lines.push((idx + 1) + '. ' + statusLabel + ' ' + String(item.detail).trim() + kobanSuffix);
     });
   } else {
     lines.push('（なし）');
@@ -206,7 +216,7 @@ function buildMailBody(params) {
   lines.push('');
   lines.push('-----------------------------------------------------------');
   lines.push('               ' + sigCompany);
-  lines.push('　　　　　　　　　　' + sigName);
+  lines.push('　　　　　　　　　' + sigName);
   lines.push('Mail:' + sigEmail);
   lines.push('-----------------------------------------------------------');
 

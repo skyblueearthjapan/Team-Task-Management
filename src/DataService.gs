@@ -263,8 +263,39 @@ function updateRow_(sheetName, id, updates, idColumn) {
 }
 
 // ════════════════════════════════════════════════════════════════
-// C. ID 生成 / タイムスタンプ
+// C. ID 生成 / タイムスタンプ / 日付ヘルパ
 // ════════════════════════════════════════════════════════════════
+
+/**
+ * 日付値（Date オブジェクト or 文字列）を YYYY-MM-DD 文字列に正規化する。
+ * Google Sheets が日付列を Date 型として自動変換する問題への対策。
+ *
+ * @param {Date|string|null|undefined} d
+ * @returns {string} YYYY-MM-DD 形式、または空文字
+ */
+function toYMD_(d) {
+  if (d == null || d === '') return '';
+  if (d instanceof Date) {
+    return Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  }
+  // 文字列の場合: ISO 形式 / 'YYYY-MM-DD' / 'YYYY/MM/DD' に対応
+  var s = String(d).trim();
+  // ISO 形式の先頭 10 文字を取得
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  // 'YYYY/MM/DD' を 'YYYY-MM-DD' に変換
+  if (/^\d{4}\/\d{1,2}\/\d{1,2}/.test(s)) {
+    var parts = s.slice(0, 10).split('/');
+    return parts[0] + '-' + parts[1].padStart(2, '0') + '-' + parts[2].padStart(2, '0');
+  }
+  // その他は new Date でパースを試行
+  try {
+    var parsed = new Date(s);
+    if (!isNaN(parsed.getTime())) {
+      return Utilities.formatDate(parsed, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    }
+  } catch (e) {}
+  return '';
+}
 
 /**
  * プレフィックス付きの短縮 UUID を生成する。
@@ -301,10 +332,13 @@ function nowIso_() {
  * @returns {Object[]}
  */
 function getSchedules(startDate, endDate) {
-  return listAll(SHEET_NAMES.SCHEDULES).filter(r => {
-    const rEnd = String(r.endDate || '');
-    const rStart = String(r.startDate || '');
-    return rEnd >= startDate && rStart <= endDate;
+  var startYmd = toYMD_(startDate);
+  var endYmd   = toYMD_(endDate);
+  return listAll(SHEET_NAMES.SCHEDULES).filter(function(r) {
+    var rEnd   = toYMD_(r.endDate);
+    var rStart = toYMD_(r.startDate);
+    if (!rStart || !rEnd) return false;
+    return rEnd >= startYmd && rStart <= endYmd;
   });
 }
 
@@ -316,7 +350,11 @@ function getSchedules(startDate, endDate) {
  * @returns {string} 生成された id（'sch_xxxxxxxxxxxxxxxx' 形式）
  */
 function createSchedule(record) {
-  record.id = generateId_('sch');
+  // クライアント側で UUID を事前生成している場合はそれを尊重する。
+  // 楽観的 UI と整合させ、successHandler 待ちの id 不整合を防ぐ。
+  if (!record.id) {
+    record.id = generateId_('sch');
+  }
   return appendRow_(SHEET_NAMES.SCHEDULES, record);
 }
 
@@ -351,10 +389,11 @@ function deleteSchedule(id) {
  * @returns {Object[]}
  */
 function getDailyReports(staffId, reportDate) {
-  return listAll(SHEET_NAMES.DAILY_REPORTS).filter(r =>
-    String(r.staffId) === String(staffId) &&
-    String(r.reportDate) === String(reportDate)
-  );
+  var targetYmd = toYMD_(reportDate);
+  return listAll(SHEET_NAMES.DAILY_REPORTS).filter(function(r) {
+    return String(r.staffId) === String(staffId) &&
+           toYMD_(r.reportDate) === targetYmd;
+  });
 }
 
 /**
@@ -392,9 +431,10 @@ function upsertDailyReport(record) {
  * @note 内部で listAll を使用。DailyReports が数千行規模になった場合は最適化要検討。
  */
 function getDailyReportsByDate(reportDate) {
-  return listAll(SHEET_NAMES.DAILY_REPORTS).filter(r =>
-    String(r.reportDate) === String(reportDate)
-  );
+  var targetYmd = toYMD_(reportDate);
+  return listAll(SHEET_NAMES.DAILY_REPORTS).filter(function(r) {
+    return toYMD_(r.reportDate) === targetYmd;
+  });
 }
 
 // ── Staff ─────────────────────────────────────────────────────
@@ -457,7 +497,7 @@ function setSetting(key, value) {
  * @param {string}        staffId    - Staff.id
  * @param {string}        reportDate - YYYY-MM-DD
  * @param {number|string} seq        - 行番号（数値 or 文字列）
- * @param {string}        [section]  - 'today' | 'prev' | 'yesterday'（省略可）
+ * @param {string}        [section]  - 'today' | 'prev'（省略可）
  * @returns {boolean} 削除成功: true、該当なし: false
  */
 function deleteDailyReportBySeq(staffId, reportDate, seq, section) {

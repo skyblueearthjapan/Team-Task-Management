@@ -1022,7 +1022,7 @@
         workTypeId:       sch.workTypeId || '',
         detail:           detailText,         // ★ Backend スキーマ準拠
         duration:         '',
-        continued:        'false',
+        continued:        false,        // FIX-A/C: boolean で統一
         periodStart:      sch.startDate,
         periodEnd:        sch.endDate,
         linkedScheduleId: scheduleId,
@@ -1097,14 +1097,23 @@
     },
 
     // Issue 2: 行構造を「期間 | 工番 | 作業内容 | 操作ボタン」に
-    // Issue 6: isToday なら「📋 前日へコピー」、!isToday なら「× 削除」
+    // Issue 6: isToday なら「📋 前日へコピー」、!isToday なら「継続/完了 + × 削除」
     _reportRow: function (r, isToday) {
       var durLabel = r.duration ? '<span class="pill" style="font-size:10px;padding:1px 6px">' + esc(r.duration) + '</span> ' : '';
-      // Backend からロード時は dateRange が無いため reportDate からフォールバック
+      // Backend からロード時は dateRange が無いため periodStart/periodEnd または reportDate からフォールバック
+      // Issue D: 期間表示を維持（periodStart/periodEnd がある場合は範囲表示）
       var fallbackDate = (r.reportDate || Store.today).toString().slice(5).replace('-', '/');
+      var periodLabel;
+      if (r.periodStart && r.periodEnd && r.periodStart !== r.periodEnd) {
+        var ps = String(r.periodStart).slice(5).replace('-', '/');
+        var pe = String(r.periodEnd).slice(5).replace('-', '/');
+        periodLabel = ps + '〜' + pe;
+      } else {
+        periodLabel = r.dateRange || fallbackDate;
+      }
       var pill = isToday
-        ? '<span class="pill pill-accent">' + esc(r.dateRange || fallbackDate) + '</span>'
-        : '<span class="pill">' + esc(r.dateRange || fallbackDate) + '</span>';
+        ? '<span class="pill pill-accent">' + esc(periodLabel) + '</span>'
+        : '<span class="pill">' + esc(periodLabel) + '</span>';
       var koban = r.kobanCode ? '<b class="mono" style="font-weight:600">' + esc(r.kobanCode) + '</b> ' : '';
       // CRITICAL FIX: detail を最優先（Backend スキーマ列名）。workTypeId から workTypes マスタを引いて補完
       var wt = r.workTypeId ? Store.workTypes.find(function (w) { return w.id === r.workTypeId; }) : null;
@@ -1113,14 +1122,20 @@
       var barCls = r.kobanCode ? Store.kobanColor(r.kobanCode) : 'bar-stone';
       var swatch = '<span class="swatch ' + barCls + '"' + (isToday ? '' : ' style="opacity:.5"') + '></span>';
 
-      // Issue 6: 操作ボタン
+      // Issue 6/C: 操作ボタン
       var actionBtn = '';
       if (isToday) {
         // 「📋 前日へコピー」ボタン
         actionBtn = '<button class="btn-copy-prev" data-seq="' + escAttr(String(r.seq)) + '" data-staff-id="' + escAttr(r.staffId) + '" title="前日へコピー" style="font-size:10px;padding:2px 6px;border:1px solid var(--line-2);border-radius:4px;background:var(--bg-panel);cursor:pointer;color:var(--txt-2)">📋</button>';
       } else {
+        // Issue C: 継続/完了セレクト（continued フィールド）
+        var isContinued = (r.continued === true || r.continued === 'true' || r.continued === 'TRUE');
+        var statusSel = '<select class="sel-continued" data-seq="' + escAttr(String(r.seq)) + '" data-staff-id="' + escAttr(r.staffId) + '" style="font-size:10px;padding:1px 4px;border:1px solid var(--line-2);border-radius:4px;background:var(--bg-panel);color:var(--txt-1);cursor:pointer;">' +
+          '<option value="false"' + (isContinued ? '' : ' selected') + '>完了</option>' +
+          '<option value="true"'  + (isContinued ? ' selected' : '') + '>継続</option>' +
+          '</select>';
         // 「× 削除」ボタン
-        actionBtn = '<button class="btn-del-row" data-seq="' + escAttr(String(r.seq)) + '" data-staff-id="' + escAttr(r.staffId) + '" title="削除" style="font-size:10px;padding:2px 6px;border:1px solid rgba(161,59,42,.3);border-radius:4px;background:var(--bg-panel);cursor:pointer;color:var(--err)">×</button>';
+        actionBtn = statusSel + '<button class="btn-del-row" data-seq="' + escAttr(String(r.seq)) + '" data-staff-id="' + escAttr(r.staffId) + '" title="削除" style="font-size:10px;padding:2px 6px;border:1px solid rgba(161,59,42,.3);border-radius:4px;background:var(--bg-panel);cursor:pointer;color:var(--err)">×</button>';
       }
 
       return '<div class="row-line">' +
@@ -1213,6 +1228,21 @@
           ReportView._copyToPrev(staffId, seq);
         });
       });
+
+      // Issue C: 継続/完了セレクト（前日行）
+      card.querySelectorAll('.sel-continued').forEach(function (sel) {
+        sel.addEventListener('change', function () {
+          var staffId = sel.dataset.staffId;
+          var seq = sel.dataset.seq;
+          var val = sel.value === 'true';
+          if (!Store.reports[staffId]) return;
+          var rec = Store.reports[staffId].find(function (r) { return String(r.seq) === String(seq); });
+          if (!rec) return;
+          rec.continued = val;
+          // FIX-A: 保存後に State を保持（再取得しない）
+          SaveQueue.flushNow(rec);
+        });
+      });
     },
 
     // Issue 6: 前日行の削除（section='prev' 限定）
@@ -1251,7 +1281,7 @@
         workTypeId:  orig.workTypeId  || '',
         detail:      detailText,        // ★ Backend スキーマ準拠
         duration:    '',                // 前日報告では duration は不要（Issue 5）
-        continued:   'true',            // 「引き続き対応」（Issue 5/6）
+        continued:   true,              // FIX-A/C: boolean で統一（Issue 5/6）
         periodStart: orig.periodStart || '',
         periodEnd:   orig.periodEnd   || '',
         // Store 表示用（前日までの日付ラベル）
@@ -1312,7 +1342,7 @@
         }
       });
 
-      // Issue 4: 期間 select（フリー入力対応）
+      // Issue 4: 期間 select（フリー入力対応）- 本日セクションのみ表示
       var durationRow = document.createElement('div');
       durationRow.style.cssText = 'display:flex; gap:6px; align-items:center;';
 
@@ -1336,6 +1366,14 @@
 
       durationRow.appendChild(durationSel);
       durationRow.appendChild(durationCustom);
+
+      // Issue C: 前日セクションには「継続/完了」セレクト
+      var continuedSel = null;
+      if (section !== 'today') {
+        continuedSel = document.createElement('select');
+        continuedSel.style.cssText = 'font-size:var(--font-input); padding:6px 10px; border:1px solid var(--line-2); border-radius:4px; background:var(--bg-panel); color:var(--txt-1); height:var(--input-height); box-sizing:border-box;';
+        continuedSel.innerHTML = '<option value="false">完了</option><option value="true">継続</option>';
+      }
 
       // 作業内容テキストエリア
       var textarea = document.createElement('textarea');
@@ -1366,7 +1404,12 @@
       form.appendChild(kobanDl);
       form.appendChild(kobanSel);
       form.appendChild(kobanInfo);
-      form.appendChild(durationRow);
+      // Issue C: today は duration、prev は continuedSel を表示
+      if (section === 'today') {
+        form.appendChild(durationRow);
+      } else if (continuedSel) {
+        form.appendChild(continuedSel);
+      }
       form.appendChild(textarea);
       form.appendChild(counter);
       form.appendChild(btnRow);
@@ -1395,9 +1438,18 @@
         if (!wtName) { toast('作業内容を入力してください', 'warn'); form._saved = false; return; }
         if (wtName.length > 500) { toast('作業内容は500文字以内にしてください', 'warn'); form._saved = false; return; }
 
-        // Issue 4: duration の決定
-        var durVal = durationSel.value;
-        if (durVal === '__custom__') durVal = durationCustom.value.trim();
+        // Issue 4: duration の決定（today セクションのみ）
+        var durVal = '';
+        if (section === 'today') {
+          durVal = durationSel.value;
+          if (durVal === '__custom__') durVal = durationCustom.value.trim();
+        }
+
+        // Issue C: continued の決定（prev セクションのみ）
+        var continuedVal = false;
+        if (section !== 'today' && continuedSel) {
+          continuedVal = (continuedSel.value === 'true');
+        }
 
         // CRITICAL FIX: DailyReports スキーマの列名は 'detail'（'note' ではない）
         // workTypeName / note / dateRange はクライアント側表示用のみで永続化されない
@@ -1409,7 +1461,7 @@
           kobanCode:   koban,
           detail:      wtName,             // ★ Backend スキーマ準拠
           duration:    durVal,
-          continued:   'false',
+          continued:   continuedVal,       // Issue C: boolean で保存
           // 以下は Store ローカル表示用（Backend では objectToRow_ により無視される）
           workTypeName: wtName,
           note:        wtName,
@@ -1774,7 +1826,14 @@
             if (result && result.success) {
               toast('再送依頼を登録しました（ID: ' + result.newId + '）', 'ok');
               self.close();
-              getDailyReportsForDate(Store.today);
+              // FIX-A: 再取得ではなく mailLatest のみ更新して State を保持
+              gasPromise('getLatestMailRequestFor', staff.id, Store.today)
+                .then(function (mq) {
+                  if (!Store.mailLatest) Store.mailLatest = {};
+                  Store.mailLatest[staff.id] = mq || null;
+                  ReportView.render();
+                })
+                .catch(function () { ReportView.render(); });
             } else {
               toast('再送失敗: ' + (result ? result.reason : '不明'), 'err');
             }
@@ -1835,7 +1894,16 @@
             if (result && result.success) {
               toast('メール依頼を登録しました', 'ok');
               self.close();
-              getDailyReportsForDate(Store.today);
+              // FIX-A: 全再取得せず mailLatest のみ更新して Store.reports を保持
+              // enqueueMailRequest 直後は status='pending' の新レコードが存在するため
+              // getLatestMailRequestFor で最新状態を取得して mailLatest のみ差し替える
+              gasPromise('getLatestMailRequestFor', staff.id, Store.today)
+                .then(function (mq) {
+                  if (!Store.mailLatest) Store.mailLatest = {};
+                  Store.mailLatest[staff.id] = mq || null;
+                  ReportView.render();
+                })
+                .catch(function () { ReportView.render(); });
             } else {
               toast('登録失敗: ' + (result ? result.reason : '不明'), 'err');
             }
