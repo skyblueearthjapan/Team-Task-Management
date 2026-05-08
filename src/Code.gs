@@ -27,7 +27,8 @@ function doGet(e) {
       '<title>アクセス権限がありません</title>' +
       '<style>body{font-family:"Yu Gothic UI","Noto Sans JP",sans-serif;' +
       'background:#f1ebe0;color:#2a2520;padding:64px;line-height:1.7;max-width:680px;margin:0 auto}' +
-      'h1{font-family:"Noto Serif JP",serif;font-size:28px;margin:0 0 16px}' +
+      // マイナス思考: セリフ装飾を排除し sans-serif に統一
+      'h1{font-size:24px;font-weight:600;margin:0 0 16px}' +
       'code{background:#fbf8f1;padding:2px 6px;border-radius:4px;border:1px solid #e1d8c5}' +
       '</style></head><body>' +
       '<h1>アクセス権限がありません</h1>' +

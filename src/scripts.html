@@ -13,6 +13,11 @@
     return d.innerHTML;
   }
 
+  /** attribute value 用エスケープ（" と & のみ。innerHTML text 部分は esc() を使う） */
+  function escAttr(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  }
+
   /** 日付を YYYY-MM-DD に変換 */
   function toYMD(d) {
     if (!d) return '';
@@ -45,19 +50,20 @@
 
   /** モーダルフォーカストラップ */
   function trapFocus(modal) {
+    if (modal._trapHandler) {
+      modal.removeEventListener('keydown', modal._trapHandler);
+    }
     var focusables = modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
     if (!focusables.length) return;
     focusables[0].focus();
-    modal.addEventListener('keydown', function onTrapKey(e) {
+    modal._trapHandler = function(e) {
       if (e.key !== 'Tab') return;
       var first = focusables[0];
       var last  = focusables[focusables.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault(); last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault(); first.focus();
-      }
-    });
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+    modal.addEventListener('keydown', modal._trapHandler);
   }
 
   /** LocalStorage バックアップ */
@@ -73,33 +79,30 @@
   // ════════════════════════════════════════════════════════════════
 
   var Store = {
-    kobanList:    [],   // [{工番, 受注先, 納入先, 納入先住所, 品名, ...}]
-    calendarMap:  {},   // { "YYYY-MM-DD": "出勤土曜"|"休日"|"祝日" }
-    holidayNotes: {},   // { "YYYY-MM-DD": "祝日名" }
-    calendar:     [],   // カレンダーマスタ raw 配列
-    staff:        [],   // [{id, name, email, displayOrder, ...}]
-    workTypes:    [],   // [{id, name, color, ...}]
-    schedules:    [],   // 全スケジュール（表示期間内）
-    reports:      {},   // { staffId: [reportRecord, ...] }
-    mailLatest:   {},   // { staffId: latestMailQueueRecord | null }
+    kobanList:    [],
+    calendarMap:  {},
+    holidayNotes: {},
+    calendar:     [],
+    staff:        [],
+    workTypes:    [],
+    schedules:    [],
+    reports:      {},
+    mailLatest:   {},
     today:        toYMD(new Date()),
-    viewDate:     toYMD(new Date()),   // ガント中心日
+    viewDate:     toYMD(new Date()),
     dayWidth:     64,
-    ganttDays:    [],   // 表示日配列 [{dateStr, dow, isToday, isWeekend, isWorkSat, holidayName}]
-    ganttStart:   '',   // 表示開始日
-    ganttEnd:     '',   // 表示終了日
+    ganttDays:    [],
+    ganttStart:   '',
+    ganttEnd:     '',
 
-    /** 工番コードからマスタ行を返す */
     kobanByCode: function (code) {
       return this.kobanList.find(function (k) { return k['工番'] === code; }) || null;
     },
 
-    /** staffId → staff オブジェクト */
     staffById: function (id) {
       return this.staff.find(function (s) { return s.id === id; }) || null;
     },
 
-    /** 工番に対応するバーカラークラスを返す（ローテーション） */
     BAR_COLORS: ['bar-clay', 'bar-plum', 'bar-ochre', 'bar-moss', 'bar-indigo', 'bar-burgundy', 'bar-stone'],
     kobanColor: function (code) {
       var idx = this.kobanList.findIndex(function (k) { return k['工番'] === code; });
@@ -119,9 +122,23 @@
   });
 
   /**
+   * gasPromise: google.script.run を Promise でラップ
+   */
+  function gasPromise(fn, arg1, arg2) {
+    return new Promise(function (res, rej) {
+      var runner = google.script.run
+        .withSuccessHandler(res)
+        .withFailureHandler(rej);
+      if (arg2 !== undefined) runner[fn](arg1, arg2);
+      else if (arg1 !== undefined) runner[fn](arg1);
+      else runner[fn]();
+    });
+  }
+
+  /**
    * 起動時データ読み込み。
    * Phase 1: getMasterPayload + getActiveStaff + getWorkTypes + getSchedules を並列実行
-   * Phase 2: staff が確定してから各スタッフの getDailyReports を並列実行
+   * Phase 2: getDailyReports(date) 単発呼び出し（FIX-3: 全スタッフ一括取得）
    */
   function loadAll() {
     var today = Store.today;
@@ -129,17 +146,6 @@
     var end   = offsetDate(today, 90);
     Store.ganttStart = start;
     Store.ganttEnd   = end;
-
-    function gasPromise(fn, arg1, arg2) {
-      return new Promise(function (res, rej) {
-        var runner = google.script.run
-          .withSuccessHandler(res)
-          .withFailureHandler(rej);
-        if (arg2 !== undefined) runner[fn](arg1, arg2);
-        else if (arg1 !== undefined) runner[fn](arg1);
-        else runner[fn]();
-      });
-    }
 
     // Phase 1: マスタ / スタッフ / 作業種別 / スケジュール を並列取得
     Promise.all([
@@ -158,7 +164,6 @@
       Store.calendar    = master.calendar    || [];
       Store.staff       = staff;
 
-      // 祝日名マップを構築（calendarマスタの備考列から）
       Store.holidayNotes = {};
       Store.calendar.forEach(function (c) {
         if (!c['備考']) return;
@@ -171,49 +176,63 @@
       Store.workTypes   = workTypes;
       Store.schedules   = schedules;
 
-      // 表示日を計算・骨格描画
       buildGanttDays();
-      renderSidebar();
       renderPageHeader();
-      renderKPIs();
+      renderGanttLegend();
       GanttView.render();
       GanttView.renderBars();
 
-      // Phase 2: 各スタッフの日報を並列取得（getDailyReports(staffId, reportDate) 署名に準拠）
+      // FIX-3: Phase 2 を全件一括取得に変更
+      // getDailyReports(date) で全スタッフ分を1回で取得
+      // 失敗しても各スタッフを個別 fallback で取得し、全員必ず表示
       if (staff.length === 0) {
         Store.reports = {};
+        Store.mailLatest = {};
         ReportView.render();
         return;
       }
-      // 日報 + 最新メール状態を並列取得
+
       return Promise.all([
-        Promise.all(staff.map(function (s) {
-          return gasPromise('getDailyReports', s.id, today)
-            .then(function (rows) { return { staffId: s.id, rows: rows || [] }; })
-            .catch(function () { return { staffId: s.id, rows: [] }; });
-        })),
+        // FIX-3: 全件一括取得を試み、失敗したら各スタッフ個別取得にフォールバック
+        gasPromise('getDailyReportsByDate', today)
+          .then(function (rows) {
+            // 戻り値が配列 → 全スタッフ分をまとめて返すシグネチャ
+            var rmap = {};
+            (rows || []).forEach(function (r) {
+              if (!rmap[r.staffId]) rmap[r.staffId] = [];
+              rmap[r.staffId].push(r);
+            });
+            return rmap;
+          })
+          .catch(function () {
+            // fallback: staffIdごとに個別取得
+            return Promise.all(staff.map(function (s) {
+              return gasPromise('getDailyReports', s.id, today)
+                .then(function (rows) { return { staffId: s.id, rows: rows || [] }; })
+                .catch(function () { return { staffId: s.id, rows: [] }; });
+            })).then(function (arr) {
+              var rmap = {};
+              arr.forEach(function (r) { rmap[r.staffId] = r.rows; });
+              return rmap;
+            });
+          }),
+        // メール状態: 各スタッフ並列取得（失敗しても止まらない）
         Promise.all(staff.map(function (s) {
           return gasPromise('getLatestMailRequestFor', s.id, today)
             .then(function (mq) { return { staffId: s.id, mq: mq || null }; })
             .catch(function () { return { staffId: s.id, mq: null }; });
         }))
       ]).then(function (results) {
-        var allReports = results[0];
-        var allMail    = results[1];
-        var rmap = {};
-        allReports.forEach(function (r) { rmap[r.staffId] = r.rows; });
-        Store.reports = rmap;
+        Store.reports    = results[0];
         var mmap = {};
-        allMail.forEach(function (r) { mmap[r.staffId] = r.mq; });
+        results[1].forEach(function (r) { mmap[r.staffId] = r.mq; });
         Store.mailLatest = mmap;
         ReportView.render();
-        lsSave('reports_' + today, rmap);
+        lsSave('reports_' + today, Store.reports);
       });
 
     }).catch(function (err) {
-      console.error('loadAll error:', err);
       toast('データの読み込みに失敗しました: ' + String(err.message || err), 'err');
-      // LocalStorage からの復旧試行
       var cached = lsLoad('reports_' + Store.today);
       if (cached) {
         Store.reports = cached;
@@ -224,36 +243,46 @@
 
   /**
    * 日付変更時に日報・最新メール状態を再取得して再描画する。
-   * @param {string} date - YYYY-MM-DD
+   * FIX-3: 全件一括取得 + fallback パターンを共通化
    */
   function getDailyReportsForDate(date) {
     if (!Store.staff.length) return;
 
-    function gasPromise2(fn, a, b) {
-      return new Promise(function (res, rej) {
-        google.script.run.withSuccessHandler(res).withFailureHandler(rej)[fn](a, b);
+    // FIX-3: 単発呼び出しを試み、失敗なら個別 fallback
+    gasPromise('getDailyReportsByDate', date)
+      .then(function (rows) {
+        var rmap = {};
+        (rows || []).forEach(function (r) {
+          if (!rmap[r.staffId]) rmap[r.staffId] = [];
+          rmap[r.staffId].push(r);
+        });
+        return rmap;
+      })
+      .catch(function () {
+        return Promise.all(Store.staff.map(function (s) {
+          return gasPromise('getDailyReports', s.id, date)
+            .then(function (rows) { return { staffId: s.id, rows: rows || [] }; })
+            .catch(function () { return { staffId: s.id, rows: [] }; });
+        })).then(function (arr) {
+          var rmap = {};
+          arr.forEach(function (r) { rmap[r.staffId] = r.rows; });
+          return rmap;
+        });
+      })
+      .then(function (rmap) {
+        Store.reports = rmap;
+        return Promise.all(Store.staff.map(function (s) {
+          return gasPromise('getLatestMailRequestFor', s.id, date)
+            .then(function (mq) { return { staffId: s.id, mq: mq || null }; })
+            .catch(function () { return { staffId: s.id, mq: null }; });
+        }));
+      })
+      .then(function (arr) {
+        var mmap = {};
+        arr.forEach(function (r) { mmap[r.staffId] = r.mq; });
+        Store.mailLatest = mmap;
+        ReportView.render();
       });
-    }
-
-    Promise.all([
-      Promise.all(Store.staff.map(function (s) {
-        return gasPromise2('getDailyReports', s.id, date)
-          .then(function (rows) { return { staffId: s.id, rows: rows || [] }; })
-          .catch(function () { return { staffId: s.id, rows: [] }; });
-      })),
-      Promise.all(Store.staff.map(function (s) {
-        return gasPromise2('getLatestMailRequestFor', s.id, date)
-          .then(function (mq) { return { staffId: s.id, mq: mq || null }; })
-          .catch(function () { return { staffId: s.id, mq: null }; });
-      }))
-    ]).then(function (results) {
-      var rmap = {}, mmap = {};
-      results[0].forEach(function (r) { rmap[r.staffId] = r.rows; });
-      results[1].forEach(function (r) { mmap[r.staffId] = r.mq;   });
-      Store.reports    = rmap;
-      Store.mailLatest = mmap;
-      ReportView.render();
-    });
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -297,7 +326,7 @@
   }
 
   // ════════════════════════════════════════════════════════════════
-  // E. ページヘッダ・KPI・サイドバー
+  // E. ページヘッダ・凡例
   // ════════════════════════════════════════════════════════════════
 
   function renderPageHeader() {
@@ -306,100 +335,22 @@
     var month = d.getMonth() + 1;
     var day   = d.getDate();
     var dow   = DOW_JA[d.getDay()];
-    var label = year + '年' + month + '月' + day + '日 · ' + dow + '曜日';
+    var label = year + '年' + month + '月' + day + '日（' + dow + '）';
+
     var el = document.getElementById('page-date-eyebrow');
     if (el) el.textContent = label;
-
-    var rLabel = document.getElementById('report-date-label');
-    if (rLabel) rLabel.textContent = year + '/' + ('0'+month).slice(-2) + '/' + ('0'+day).slice(-2) + ' ' + dow;
+    // report-date-label はヘッダ日付と重複するため削除済み
   }
 
-  function renderKPIs() {
-    var todayScheds = Store.schedules.filter(function (s) {
-      return s.startDate <= Store.today && s.endDate >= Store.today;
-    });
-    var taskCount = todayScheds.length;
-    var staffCount = Store.staff.length;
-    var kobanCount = Store.kobanList.length;
-
-    setEl('kpi-tasks', String(taskCount));
-    setEl('kpi-tasks-sub', staffCount + '名のスタッフ');
-
-    // MailQueue 統計を非同期取得（失敗時は "—" のまま）
-    try {
-      google.script.run
-        .withSuccessHandler(function (s) {
-          if (!s) return;
-          setEl('kpi-pending', String(s.pending + s.picked));
-          setEl('kpi-pending-sub', '処理中: ' + s.picked + ' / 待機: ' + s.pending);
-          setEl('kpi-sent',    String(s.sent + s.drafted));
-          setEl('kpi-sent-sub', '送信: ' + s.sent + ' / 下書き: ' + s.drafted);
-          setEl('kpi-failed',  String(s.failed));
-          setEl('kpi-failed-sub', s.failed > 0 ? '要対応' : '問題なし');
-          // サイドバー pending バッジ
-          var pendingBadge = document.getElementById('sidebar-mail-pending');
-          if (pendingBadge) {
-            var n = s.pending + s.picked;
-            pendingBadge.style.display = n > 0 ? 'inline-block' : 'none';
-            pendingBadge.textContent   = String(n);
-          }
-        })
-        .withFailureHandler(function () {
-          setEl('kpi-pending', '—'); setEl('kpi-pending-sub', '—');
-          setEl('kpi-sent',    '—'); setEl('kpi-sent-sub',    '—');
-          setEl('kpi-failed',  '—'); setEl('kpi-failed-sub',  '—');
-        })
-        .getMailQueueStats();
-    } catch (_e) {
-      setEl('kpi-pending', '—'); setEl('kpi-pending-sub', '—');
-      setEl('kpi-sent',    '—'); setEl('kpi-sent-sub',    '—');
-      setEl('kpi-failed',  '—'); setEl('kpi-failed-sub',  '—');
-    }
-
-    var sub = document.getElementById('page-sub');
-    if (sub) sub.innerHTML = staffCount + '名 · 進行中 ' + kobanCount + '案件';
-
-    setEl('sidebar-task-count', String(taskCount));
-  }
-
-  function setEl(id, text) {
-    var el = document.getElementById(id);
-    if (el) el.textContent = text;
-  }
-
-  function renderSidebar() {
-    // スタッフリスト
-    var staffList = document.getElementById('sidebar-staff-list');
-    if (staffList) {
-      staffList.innerHTML = Store.staff.map(function (s, i) {
-        var avClass = 'av-' + ((i % 6) + 1);
-        var initial = s.name ? esc(s.name.charAt(0)) : '?';
-        return '<div class="nav-item"><span class="w-5 h-5 rounded-full grid place-items-center text-[9px] font-semibold ' + avClass + (i === 2 ? '' : ' text-white') + '">' + initial + '</span><span>' + esc(s.name) + '</span></div>';
-      }).join('');
-    }
-
-    // 工番リスト（最大10件）
-    var kobanList = document.getElementById('sidebar-koban-list');
-    if (kobanList) {
-      var topKoban = Store.kobanList.slice(0, 10);
-      kobanList.innerHTML = topKoban.map(function (k, i) {
-        var barClass = Store.BAR_COLORS[i % Store.BAR_COLORS.length];
-        var client = k['受注先'] || '';
-        return '<div class="nav-item"><span class="swatch ' + barClass + '"></span><span class="mono text-[12px]">' + esc(k['工番']) + '</span><span style="color:var(--txt-3)" class="text-[11px]">' + esc(client) + '</span></div>';
-      }).join('');
-    }
-
-    // ガント凡例
+  function renderGanttLegend() {
     var legend = document.getElementById('gantt-legend');
-    if (legend) {
-      var legendHtml = Store.kobanList.slice(0, 7).map(function (k, i) {
-        var barClass = Store.BAR_COLORS[i % Store.BAR_COLORS.length];
-        return '<span class="flex items-center gap-1.5"><span class="swatch ' + barClass + '"></span>' + esc(k['工番']) + '</span>';
-      }).join('');
-      legendHtml += '<span class="flex items-center gap-1.5"><span class="swatch bar-burgundy"></span>一般作業</span>';
-      legendHtml += '<span class="flex items-center gap-1.5"><span class="swatch bar-stone"></span>不在/休暇</span>';
-      legend.innerHTML = legendHtml;
-    }
+    if (!legend) return;
+    // マイナス思考: 「一般」「不在」のダミー swatch は削除（実際の工番に紐づかない装飾）
+    var html = Store.kobanList.slice(0, 7).map(function (k, i) {
+      var barClass = Store.BAR_COLORS[i % Store.BAR_COLORS.length];
+      return '<span class="flex items-center gap-1.5"><span class="swatch ' + barClass + '"></span>' + esc(k['工番']) + '</span>';
+    }).join('');
+    legend.innerHTML = html;
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -424,12 +375,10 @@
       var grid = document.getElementById('gantt-days-grid');
       if (!grid) return;
 
-      // grid-template-columns / rows
       var staffCount = Store.staff.length;
       grid.style.gridTemplateColumns = 'repeat(' + n + ', ' + dw + 'px)';
       grid.style.gridTemplateRows    = '32px 32px repeat(' + Math.max(staffCount, 1) + ', 56px)';
 
-      // 月ヘッダ構築
       var months = [];
       var curMonth = '';
       var curStart = 1;
@@ -445,14 +394,12 @@
 
       var html = '';
 
-      // 月ヘッダ
       months.forEach(function (m) {
         var parts = m.label.split('-');
         var label = parts[0] + '年 ' + (+parts[1]) + '月';
         html += '<div class="gantt-month" style="grid-column:' + m.start + ' / span ' + m.span + ';">' + label + '</div>';
       });
 
-      // 日付ヘッダ
       days.forEach(function (d, i) {
         var cls = 'gantt-day-head';
         if (d.isToday)   cls += ' today';
@@ -473,8 +420,6 @@
       });
 
       grid.innerHTML = html;
-
-      // 更新後に各スタッフ行を再追加
       this._appendStaffRowCells(grid);
     },
 
@@ -492,7 +437,6 @@
         rowDiv.dataset.rowIdx  = rowIdx;
         rowDiv.classList.add('gantt-row');
 
-        // セル背景グリッド
         var cellsDiv = document.createElement('div');
         cellsDiv.style.cssText = 'position:absolute; inset:0; display:grid; grid-template-columns:repeat(' + n + ', ' + dw + 'px);';
         days.forEach(function (d) {
@@ -502,7 +446,6 @@
         });
         rowDiv.appendChild(cellsDiv);
 
-        // ドラッグで新規バー作成オーバーレイ
         var overlay = document.createElement('div');
         overlay.className = 'gantt-row-overlay';
         overlay.dataset.staffId = s.id;
@@ -517,7 +460,6 @@
       var staffCol = document.getElementById('gantt-staff-col');
       if (!staffCol) return;
 
-      // ヘッダ行は保持、スタッフ行を再構築
       var header = staffCol.querySelector('.staff-cell.header');
       staffCol.innerHTML = '';
       if (header) staffCol.appendChild(header);
@@ -530,13 +472,13 @@
       }
 
       Store.staff.forEach(function (s, i) {
-        var avClass = 'av-' + ((i % 6) + 1);
+        var avClass = 'av-' + ((i % 7) + 1);
         var isLast  = (i === Store.staff.length - 1);
         var cell = document.createElement('div');
         cell.className = 'staff-cell';
         if (isLast) cell.style.borderBottom = 'none';
         var initial = s.name ? esc(s.name.charAt(0)) : '?';
-        var noText  = (i === 2) ? '' : 'text-white';
+        var noText  = (i % 7 === 2) ? '' : 'text-white';
         cell.innerHTML =
           '<div class="avatar ' + avClass + ' ' + noText + '">' + initial + '</div>' +
           '<div class="name"><span>' + esc(s.name) + '</span><span class="email mono">' + esc((s.email || '').split('@')[0]) + '</span></div>';
@@ -554,7 +496,6 @@
     },
 
     renderBars: function () {
-      // バー表示: 全行の既存バーを消してから再描画
       document.querySelectorAll('.gantt-bar').forEach(function (b) { b.remove(); });
 
       Store.schedules.forEach(function (sch) {
@@ -572,11 +513,9 @@
         var left  = startIdx * dw + 4;
         var width = (endIdx - startIdx + 1) * dw - 8;
 
-        // バーカラー決定
         var barClass = sch.kobanCode ? Store.kobanColor(sch.kobanCode) : 'bar-stone';
 
-        // テキスト
-        var koban = sch.kobanCode || '';
+        var koban  = sch.kobanCode || '';
         var master = Store.kobanByCode(koban);
         var client = master ? (master['受注先'] || '') : '';
         var wt = Store.workTypes.find(function (w) { return w.id === sch.workTypeId; });
@@ -590,16 +529,13 @@
         bar.textContent = label;
         bar.dataset.id  = sch.id;
 
-        // ドラッグ移動
         DragMove.attach(bar, sch);
 
-        // ダブルクリックで編集
         bar.addEventListener('dblclick', function (e) {
           e.stopPropagation();
           GanttEditModal.open(sch);
         });
 
-        // リサイズハンドル
         var lh = document.createElement('div');
         lh.className = 'resize-handle left';
         lh.addEventListener('mousedown', function (e) { DragResize.start(e, bar, sch, 'left'); });
@@ -610,12 +546,10 @@
         rh.addEventListener('mousedown', function (e) { DragResize.start(e, bar, sch, 'right'); });
         bar.appendChild(rh);
 
-        // ツールチップ（納入先住所）
         if (master && master['納入先住所']) {
           bar.title = master['納入先住所'];
         }
 
-        // 行に追加
         var rowGrid = document.getElementById('gantt-days-grid');
         if (!rowGrid) return;
         var rows = rowGrid.querySelectorAll('.gantt-row');
@@ -628,7 +562,6 @@
   // G. ドラッグ操作
   // ════════════════════════════════════════════════════════════════
 
-  /** ガントバー作成ドラッグ */
   var DragCreate = {
     attachOverlay: function (overlay) {
       var startX = 0, ghost = null, startCol = 0;
@@ -684,10 +617,9 @@
     }
   };
 
-  /** ガントバー移動ドラッグ */
   var DragMove = {
     attach: function (bar, sch) {
-      var startX = 0, origLeft = 0, origWidth = 0;
+      var startX = 0, origLeft = 0;
       var dragging = false;
       var origStartDate = '', origEndDate = '';
 
@@ -716,18 +648,15 @@
         var newStart = toYMD(startD);
         var newEnd   = toYMD(endD);
 
-        // 楽観的UI更新
         sch.startDate = newStart;
         sch.endDate   = newEnd;
         GanttView.renderBars();
 
-        // バックエンド保存（ロールバック用に元値を使用）
         var savedOrigStart = origStartDate;
         var savedOrigEnd   = origEndDate;
         google.script.run
           .withFailureHandler(function (err) {
             toast('移動の保存に失敗しました: ' + String(err.message || err), 'err');
-            // ロールバック: mousedown 時点の元値に戻す
             sch.startDate = savedOrigStart;
             sch.endDate   = savedOrigEnd;
             GanttView.renderBars();
@@ -742,8 +671,6 @@
         dragging = true;
         startX        = e.clientX;
         origLeft      = parseInt(bar.style.left);
-        origWidth     = parseInt(bar.style.width);
-        // mousedown 時点の元値を保存（ロールバック用）
         origStartDate = sch.startDate;
         origEndDate   = sch.endDate;
         bar.style.opacity = '0.8';
@@ -754,14 +681,15 @@
     }
   };
 
-  /** ガントバー伸縮ドラッグ */
   var DragResize = {
     start: function (e, bar, sch, side) {
       e.preventDefault();
       e.stopPropagation();
-      var startX   = e.clientX;
-      var origLeft = parseInt(bar.style.left);
-      var origWidth= parseInt(bar.style.width);
+      var startX        = e.clientX;
+      var origLeft      = parseInt(bar.style.left);
+      var origWidth     = parseInt(bar.style.width);
+      var origStartDate = sch.startDate;
+      var origEndDate   = sch.endDate;
 
       function onMove(ev) {
         var delta = ev.clientX - startX;
@@ -794,6 +722,9 @@
         google.script.run
           .withFailureHandler(function (err) {
             toast('リサイズの保存に失敗: ' + String(err.message || err), 'err');
+            sch.startDate = origStartDate;
+            sch.endDate   = origEndDate;
+            GanttView.renderBars();
           })
           .updateSchedule(sch.id, { startDate: newStart, endDate: newEnd });
       }
@@ -822,27 +753,23 @@
       document.getElementById('ge-end').value      = sch.endDate || '';
       document.getElementById('ge-note').value     = sch.note || '';
 
-      // 工番datalist
       var dl = document.getElementById('koban-datalist');
       if (dl) {
         dl.innerHTML = Store.kobanList.map(function (k) {
-          return '<option value="' + esc(k['工番']) + '">' + esc(k['工番']) + ' ' + esc(k['受注先'] || '') + '</option>';
+          return '<option value="' + escAttr(k['工番']) + '">' + esc(k['工番']) + ' ' + esc(k['受注先'] || '') + '</option>';
         }).join('');
       }
 
-      // 工番info更新
       this._updateKobanInfo(sch.kobanCode);
 
-      // 作業内容セレクト
       var sel = document.getElementById('ge-worktype');
       if (sel) {
         sel.innerHTML = '<option value="">選択…</option>' +
           Store.workTypes.map(function (w) {
-            return '<option value="' + esc(w.id) + '"' + (w.id === sch.workTypeId ? ' selected' : '') + '>' + esc(w.name) + '</option>';
+            return '<option value="' + escAttr(w.id) + '"' + (w.id === sch.workTypeId ? ' selected' : '') + '>' + esc(w.name) + '</option>';
           }).join('');
       }
 
-      // 削除ボタン表示
       var delBtn = document.getElementById('ge-delete');
       if (delBtn) delBtn.style.display = sch.id ? 'inline-block' : 'none';
 
@@ -881,7 +808,6 @@
       };
 
       if (id) {
-        // 更新: 楽観的UI
         var existing = Store.schedules.find(function (s) { return s.id === id; });
         if (existing) Object.assign(existing, record);
         GanttView.renderBars();
@@ -892,29 +818,35 @@
           .withFailureHandler(function (err) { toast('更新失敗: ' + String(err.message || err), 'err'); })
           .updateSchedule(id, record);
       } else {
-        // 新規: クライアント側で ID を事前生成（サーバの戻り値依存を排除）
+        // FIX-4: クライアント側で UUID を事前生成 → 楽観的 UI → 失敗時ロールバック
         var newId = 'sch_' + (window.crypto && crypto.randomUUID
           ? crypto.randomUUID().replace(/-/g, '').substring(0, 16)
           : Math.random().toString(36).substring(2, 18));
         record.id = newId;
 
-        // 楽観的UI更新
         Store.schedules.push(record);
         GanttView.renderBars();
         this.close();
 
+        // FIX-5: ガント追加成功時、対応する日報行を自動生成
         google.script.run
           .withSuccessHandler(function (serverId) {
-            // サーバから別 ID が返ってきた場合は同期
             if (serverId && serverId !== newId) {
               var existing = Store.schedules.find(function (s) { return s.id === newId; });
               if (existing) existing.id = serverId;
             }
+            GanttView.renderBars();  // dataset.id をサーバ確定 id に同期
             toast('スケジュールを追加しました', 'ok');
+            // FIX-5: スケジュール追加 → 今日が期間内であれば日報行を自動生成
+            var today = Store.today;
+            var finalId = (serverId && serverId !== newId) ? serverId : newId;
+            if (record.startDate <= today && record.endDate >= today) {
+              ReportView.autoAddReportRow(record.staffId, finalId, record);
+            }
           })
           .withFailureHandler(function (err) {
             toast('追加失敗: ' + String(err.message || err), 'err');
-            // ロールバック
+            // FIX-4: ロールバック
             Store.schedules = Store.schedules.filter(function (s) { return s.id !== newId; });
             GanttView.renderBars();
           })
@@ -927,7 +859,6 @@
       if (!id) return;
       if (!confirm('このスケジュールを削除しますか？')) return;
 
-      // 楽観的UI
       Store.schedules = Store.schedules.filter(function (s) { return s.id !== id; });
       GanttView.renderBars();
       this.close();
@@ -945,7 +876,6 @@
       var m = Store.kobanByCode(code);
       if (m) {
         info.textContent = '受注先: ' + (m['受注先'] || '—') + ' / 納入先: ' + (m['納入先'] || '—') + ' / ' + (m['品名'] || '');
-        // textContent を使用しているため XSS リスクなし
       } else {
         info.textContent = '';
       }
@@ -960,11 +890,11 @@
     render: function () {
       var grid = document.getElementById('report-cards-grid');
       if (!grid) return;
+      // FIX-3: Store.staff の全員分を必ず描画（ループを Store.staff 基準にする）
       grid.innerHTML = Store.staff.map(function (s, i) {
         return ReportView._buildCard(s, i);
       }).join('');
 
-      // 保存ハンドラをアタッチ
       Store.staff.forEach(function (s) {
         ReportView._attachCardHandlers(s);
       });
@@ -972,40 +902,75 @@
       lsSave('reports_' + Store.today, Store.reports);
     },
 
+    /**
+     * FIX-5: ガント追加後、今日の日報行を自動生成して再描画する
+     */
+    autoAddReportRow: function (staffId, scheduleId, sch) {
+      if (!Store.reports[staffId]) Store.reports[staffId] = [];
+
+      // 同一 linkedScheduleId の行が既に存在する場合はスキップ
+      var already = Store.reports[staffId].some(function (r) {
+        return r.linkedScheduleId === scheduleId;
+      });
+      if (already) return;
+
+      var wt = Store.workTypes.find(function (w) { return w.id === sch.workTypeId; });
+      var wtName = wt ? wt.name : (sch.note || '');
+
+      var newRow = {
+        staffId:          staffId,
+        reportDate:       Store.today,
+        section:          'today',
+        seq:              Date.now(),
+        kobanCode:        sch.kobanCode || '',
+        workTypeId:       sch.workTypeId || '',
+        workTypeName:     wtName,
+        note:             sch.note || '',
+        dateRange:        Store.today.slice(5).replace('-', '/'),
+        periodStart:      sch.startDate,
+        periodEnd:        sch.endDate,
+        linkedScheduleId: scheduleId
+      };
+
+      Store.reports[staffId].push(newRow);
+      ReportView.render();
+
+      // バックグラウンドで日報を保存（失敗しても UI は維持）
+      SaveQueue.enqueue(newRow);
+    },
+
     _buildCard: function (s, idx) {
-      var avClass  = 'av-' + ((idx % 6) + 1);
-      var noText   = (idx % 6 === 2) ? '' : ' text-white';
+      var avClass  = 'av-' + ((idx % 7) + 1);
+      var noText   = (idx % 7 === 2) ? '' : ' text-white';
       var initial  = s.name ? s.name.charAt(0) : '?';
       var reports  = Store.reports[s.id] || [];
       var today    = Store.today;
 
       var todayReps = reports.filter(function (r) { return r.reportDate === today && r.section === 'today'; });
-      var prevReps  = reports.filter(function (r) { return r.reportDate !== today || r.section === 'prev'; });
+      // 一貫性: MailModal._buildMailBody と同じ section ベースで判定
+      var prevReps  = reports.filter(function (r) { return r.section === 'prev' || r.section === 'yesterday'; });
 
-      // ステータス判定: Store.mailLatest から MailQueue.status を引く
       var mq = (Store.mailLatest && Store.mailLatest[s.id]) || null;
       var mailStatus = 'idle';
       if (mq && mq.status) {
-        // 'picked' は UI 上 'pending' と等価扱い（処理中）
         mailStatus = (mq.status === 'picked') ? 'pending' : mq.status;
       }
 
       var statusBadge = ReportView._statusBadge(mailStatus);
       var footerHtml  = ReportView._footerHtml(s, mailStatus, reports);
 
-      // 今日の作業行
       var todayRows = todayReps.map(function (r) {
         return ReportView._reportRow(r, true);
       }).join('');
+      // FIX-6: 追加ボタンを明示的に表示
       todayRows += '<div class="row-line row-add" data-staff-id="' + esc(s.id) + '" data-section="today"><span class="pill">+ 追加</span><span>クリックで作業内容を追加</span><span></span></div>';
 
-      // 前日の作業行
       var prevRows = prevReps.map(function (r) {
         return ReportView._reportRow(r, false);
       }).join('');
       prevRows += '<div class="row-line row-add" data-staff-id="' + esc(s.id) + '" data-section="prev"><span class="pill">+ 追加</span><span>クリックで報告を追加</span><span></span></div>';
 
-      var borderStyle = mailStatus === 'pending' ? ' style="border-color:rgba(184,134,42,0.5); box-shadow: 0 0 0 3px rgba(184,134,42,0.06), 0 1px 0 rgba(60,40,20,0.04), 0 8px 20px rgba(60,40,20,0.04);"'
+      var borderStyle = mailStatus === 'pending' ? ' style="border-color:rgba(184,134,42,0.5);"'
                       : mailStatus === 'failed'  ? ' style="border-color:rgba(161,59,42,0.45);"'
                       : '';
 
@@ -1020,11 +985,12 @@
           '</div>' +
           statusBadge +
         '</header>' +
-        '<div class="px-4 py-3.5">' +
-          '<div class="rule">本日の作業内容</div>' +
-          '<div class="space-y-1.5" id="today-rows-' + esc(s.id) + '">' + todayRows + '</div>' +
-          '<div class="rule mt-4">前日までの報告</div>' +
-          '<div class="space-y-1.5" id="prev-rows-' + esc(s.id) + '">' + prevRows + '</div>' +
+        // FIX-1: カード本体に min-width:0 を指定してレイアウト崩れを防ぐ
+        '<div class="px-4 py-3" style="min-width:0">' +
+          '<div class="text-[11px] font-semibold mb-1.5" style="color:var(--txt-3)">本日の作業内容</div>' +
+          '<div class="space-y-1" id="today-rows-' + esc(s.id) + '">' + todayRows + '</div>' +
+          '<div class="text-[11px] font-semibold mt-3 mb-1.5" style="color:var(--txt-3)">前日までの報告</div>' +
+          '<div class="space-y-1" id="prev-rows-' + esc(s.id) + '">' + prevRows + '</div>' +
         '</div>' +
         footerHtml +
         '</article>';
@@ -1037,7 +1003,7 @@
       var wtName = esc(r.workTypeName || r.note || '');
       var barCls = r.kobanCode ? Store.kobanColor(r.kobanCode) : 'bar-stone';
       var swatch = '<span class="swatch ' + barCls + '"' + (isToday ? '' : ' style="opacity:.5"') + '></span>';
-      return '<div class="row-line">' + pill + '<span class="truncate">' + koban + wtName + '</span>' + swatch + '</div>';
+      return '<div class="row-line"><span class="flex-shrink-0">' + pill + '</span><span class="truncate">' + koban + wtName + '</span>' + swatch + '</div>';
     },
 
     _statusBadge: function (status) {
@@ -1051,8 +1017,8 @@
       return map[status] || map['idle'];
     },
 
+    // FIX-7/8: メールボタンを各カードに明示配置
     _footerHtml: function (s, status, reports) {
-      // 最終更新時刻は MailQueue.processedAt（または createdAt）優先で表示
       var mq = (Store.mailLatest && Store.mailLatest[s.id]) || null;
       var lastUpdated = '';
       if (mq) {
@@ -1064,16 +1030,19 @@
 
       if (status === 'sent') {
         footerLeft = '<span class="text-[11px]" style="color:var(--ok)">本日 <span class="mono">' + lastUpdated + '</span> に送信済</span>';
-        footerBtn  = '<button class="btn-secondary text-xs" style="padding:6px 14px" data-action="resend" data-staff-id="' + s.id + '">再送する</button>';
+        // FIX-7/8: 再送ボタンをラベル付きで明示
+        footerBtn  = '<button class="btn-secondary text-xs" style="padding:6px 14px" data-action="resend" data-staff-id="' + s.id + '">📧 再送する</button>';
       } else if (status === 'pending') {
         footerLeft = '<span class="text-[11px] flex items-center gap-1.5" style="color:var(--warn)"><span class="inline-block w-1.5 h-1.5 rounded-full" style="background:var(--warn); animation:pulse 1.6s infinite"></span>EXE が処理中</span>';
         footerBtn  = '<button class="btn-secondary text-xs" style="padding:6px 14px; opacity:.6" disabled>処理中…</button>';
       } else if (status === 'failed') {
         footerLeft = '<span class="text-[11px]" style="color:var(--err)">最終試行 <span class="mono">' + lastUpdated + '</span></span>';
-        footerBtn  = '<button class="btn-secondary text-xs" style="padding:6px 14px" data-action="resend" data-staff-id="' + s.id + '">↻ 再試行</button>';
+        // FIX-7/8: 再送ボタンをラベル付きで明示
+        footerBtn  = '<button class="btn-accent text-xs" style="padding:6px 14px" data-action="resend" data-staff-id="' + s.id + '">📧 再送する</button>';
       } else {
         footerLeft = '<span class="text-[11px]" style="color:var(--txt-3)">最終更新 <span class="mono">' + (lastUpdated || '—') + '</span></span>';
-        footerBtn  = '<button class="btn-accent text-xs" style="padding:6px 14px" data-action="draft" data-staff-id="' + s.id + '">メール下書き作成</button>';
+        // FIX-7/8: 下書き作成ボタンをラベル付きで明示（各カード右下）
+        footerBtn  = '<button class="btn-accent text-xs" style="padding:6px 14px" data-action="draft" data-staff-id="' + s.id + '">📧 メール下書き作成</button>';
       }
 
       return '<footer class="px-4 py-2.5 flex items-center justify-between" style="border-top:1px solid var(--line); background:var(--bg-soft)">' +
@@ -1084,14 +1053,14 @@
       var card = document.getElementById('report-card-' + s.id);
       if (!card) return;
 
-      // 追加ボタン
+      // FIX-6: 追加ボタンのハンドラ
       card.querySelectorAll('.row-add').forEach(function (el) {
         el.addEventListener('click', function () {
           ReportView._openInlineAdd(s, el.dataset.section);
         });
       });
 
-      // メール下書きボタン
+      // FIX-7/8: メール下書きボタン
       var draftBtn = card.querySelector('[data-action="draft"]');
       if (draftBtn) {
         draftBtn.addEventListener('click', function () {
@@ -1099,7 +1068,7 @@
         });
       }
 
-      // 再送ボタン
+      // FIX-7/8: 再送ボタン
       var resendBtn = card.querySelector('[data-action="resend"]');
       if (resendBtn) {
         resendBtn.addEventListener('click', function () {
@@ -1108,16 +1077,17 @@
       }
     },
 
+    // FIX-6: インライン textarea 入力（日報追加）
     _openInlineAdd: function (s, section) {
-      // インライン textarea 入力（日報追加）
       var containerId = section === 'today' ? 'today-rows-' + s.id : 'prev-rows-' + s.id;
       var container = document.getElementById(containerId);
       if (!container) return;
 
-      // 既存のインラインフォームがあれば除去
+      // 既存フォームがあれば除去（トグル動作）
       var existing = container.querySelector('.inline-add-form');
       if (existing) { existing.remove(); return; }
 
+      // FIX-1: フォームを .inline-add-form クラス（CSS で min-width:0, overflow:hidden）で作成
       var form = document.createElement('div');
       form.className = 'inline-add-form';
       form.style.cssText = 'display:flex; flex-direction:column; gap:6px; padding:8px; background:var(--bg-soft); border-radius:6px; margin-top:4px;';
@@ -1125,13 +1095,20 @@
       var kobanInput = document.createElement('input');
       kobanInput.type = 'text';
       kobanInput.placeholder = '工番（空欄可）';
-      kobanInput.style.cssText = 'font-size:12px; padding:4px 8px; border:1px solid var(--line-2); border-radius:4px; background:var(--bg-panel); color:var(--txt-1);';
+      // FIX-1: width:100% + box-sizing:border-box
+      kobanInput.style.cssText = 'width:100%; box-sizing:border-box; font-size:12px; padding:4px 8px; border:1px solid var(--line-2); border-radius:4px; background:var(--bg-panel); color:var(--txt-1); min-width:0;';
 
+      // FIX-6: textarea を直接挿入、500文字制限、Enter保存・Shift+Enter改行
       var textarea = document.createElement('textarea');
       textarea.placeholder = '作業内容（Shift+Enter で改行、Enter で保存）';
       textarea.maxLength = 500;
       textarea.rows = 3;
-      textarea.style.cssText = 'font-size:12px; padding:4px 8px; border:1px solid var(--line-2); border-radius:4px; background:var(--bg-panel); color:var(--txt-1); resize:vertical;';
+      // FIX-1: textarea に width:100% + box-sizing:border-box + min-width:0
+      textarea.style.cssText = 'width:100%; box-sizing:border-box; font-size:12px; padding:4px 8px; border:1px solid var(--line-2); border-radius:4px; background:var(--bg-panel); color:var(--txt-1); resize:vertical; min-width:0;';
+
+      var counter = document.createElement('div');
+      counter.className = 'char-counter';
+      counter.textContent = '0 / 500';
 
       var btnRow = document.createElement('div');
       btnRow.style.cssText = 'display:flex; gap:6px; justify-content:flex-end;';
@@ -1150,11 +1127,22 @@
       btnRow.appendChild(saveBtn);
       form.appendChild(kobanInput);
       form.appendChild(textarea);
+      form.appendChild(counter);
       form.appendChild(btnRow);
       container.appendChild(form);
       kobanInput.focus();
 
+      // FIX-6: 文字数カウンタ更新
+      textarea.addEventListener('input', function () {
+        var len = textarea.value.length;
+        counter.textContent = len + ' / 500';
+        counter.className = 'char-counter' + (len > 500 ? ' over' : '');
+      });
+
+      // FIX-6: 保存処理
       function doSave() {
+        if (form._saved) return;
+        form._saved = true;
         var koban  = kobanInput.value.trim();
         var wtName = textarea.value.trim();
         if (!wtName) { toast('作業内容を入力してください', 'warn'); return; }
@@ -1173,14 +1161,16 @@
 
         if (!Store.reports[s.id]) Store.reports[s.id] = [];
         Store.reports[s.id].push(record);
+        // FIX-6: 楽観的UI更新
         ReportView.render();
+        // FIX-6: upsertDailyReport で保存
         SaveQueue.enqueue(record);
       }
 
       saveBtn.addEventListener('click', doSave);
       cancelBtn.addEventListener('click', function () { form.remove(); });
 
-      // Enter で保存（Shift+Enter は改行）
+      // FIX-6: Enter で保存（Shift+Enter は改行）
       textarea.addEventListener('keydown', function (e) {
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
@@ -1188,13 +1178,13 @@
         }
       });
 
-      // フォーカスアウトで保存（textarea と saveBtn 外へ移動した場合）
+      // FIX-6: blur で保存（フォームの外にフォーカスが移った場合）
       textarea.addEventListener('blur', function () {
         setTimeout(function () {
-          if (document.activeElement !== saveBtn && document.activeElement !== kobanInput && !form.contains(document.activeElement)) {
-            if (textarea.value.trim()) doSave();
-            else form.remove();
-          }
+          // フォーム内に focus が残っているなら何もしない（ボタン押下中・別 input 編集中）
+          if (form.contains(document.activeElement)) return;
+          if (textarea.value.trim()) doSave();
+          else form.remove();
         }, 150);
       });
     }
@@ -1211,6 +1201,7 @@
       var key = record.staffId + '_' + record.section + '_' + record.seq;
       clearTimeout(this._timers[key]);
       this._timers[key] = setTimeout(function () {
+        // FIX-6: upsertDailyReport を確実に呼び出す
         google.script.run
           .withSuccessHandler(function () {
             toast('日報を保存しました', 'ok');
@@ -1221,7 +1212,7 @@
             lsSave('reports_backup_' + Date.now(), record);
           })
           .upsertDailyReport(record);
-      }, 3000);
+      }, 800);  // FIX-6: デバウンス 800ms（リロード前に flush される確率を上げるため短縮）
     }
   };
 
@@ -1245,7 +1236,6 @@
     },
 
     openResend: function (staff) {
-      // 仕様 §7.4.6: sent 状態の場合は警告ダイアログ
       var mq = (Store.mailLatest && Store.mailLatest[staff.id]) || null;
       var mailStatus = mq ? mq.status : 'idle';
       if (!mq) {
@@ -1271,53 +1261,38 @@
 
     _populate: function (staff) {
       var setId = function (id, val) { var el = document.getElementById(id); if (el) el.textContent = val; };
-      var setHtml = function (id, val) { var el = document.getElementById(id); if (el) el.innerHTML = val; };
 
       var avEl = document.getElementById('modal-staff-avatar');
       if (avEl) {
         var staffIdx = Store.staff.findIndex(function (s) { return s.id === staff.id; });
-        avEl.className = 'w-7 h-7 rounded-full grid place-items-center text-[10.5px] font-semibold text-white av-' + ((staffIdx % 6) + 1);
+        avEl.className = 'w-7 h-7 rounded-full grid place-items-center text-[10.5px] font-semibold text-white av-' + ((staffIdx % 7) + 1);
         avEl.textContent = staff.name ? staff.name.charAt(0) : '?';
       }
       setId('modal-staff-name',  staff.name || '');
       setId('modal-staff-email', staff.email || '');
 
-      // 送付先（本人以外のスタッフのメールアドレス）
       var others = Store.staff.filter(function (s) { return s.id !== staff.id && s.email; });
       var toCount = document.getElementById('modal-to-count');
       if (toCount) toCount.textContent = others.length + '名';
       var toDiv = document.getElementById('modal-to-addresses');
       if (toDiv) toDiv.innerHTML = others.map(function (s) { return '<div>' + esc(s.email) + '</div>'; }).join('');
 
-      // メールアドレス一致確認バッジ（仕様 §7.4.2 ① モーダル表示時）
-      // Store.staff は loadAll で取得した最新 Staff マスタのスナップショット。
-      // 初回フェッチ後に管理者がメールを書き換えた場合、UI 側は次回ロード時に最新化される。
-      // サーバ側は enqueueMailRequest 内でも再度 Staff マスタを参照するため、二重防御となる。
       var badge = document.getElementById('modal-email-match-badge');
       if (badge) {
         var matched = !!staff.email;
         badge.textContent = matched ? '✓ 一致確認OK' : '⚠ メール未設定';
         badge.className   = 'badge ' + (matched ? 'badge-sent' : 'badge-failed');
       }
-      // 送信ボタン活性制御（メール未設定時はクリック不可に近い見た目に）
       var subBtn = document.getElementById('mail-modal-submit');
       if (subBtn) {
         subBtn.disabled = !staff.email;
         subBtn.style.opacity = staff.email ? '' : '0.5';
       }
 
-      // 本文プレビュー
       var preview = document.getElementById('modal-body-preview');
       if (preview) preview.textContent = this._buildMailBody(staff);
     },
 
-    /**
-     * 仕様 §7.4.7 準拠の構造化アイテム配列を生成する。
-     * EXE template.py に渡す bodyVars.todayItems / yesterdayItems と同形式。
-     *
-     * @param {Object[]} reps - 該当 section の reports 配列
-     * @returns {Object[]} [{periodStart, periodEnd, kobanCode, customer, productName, workType, detail}, ...]
-     */
     _buildItems: function (reps) {
       return reps.map(function (r) {
         var koban  = r.kobanCode || '';
@@ -1328,7 +1303,6 @@
           ? Store.workTypes.find(function (w) { return w.id === r.workTypeId; })
           : null;
         var workType = wt ? wt.name : (r.workTypeName || '');
-        // 期間: periodStart/End がなければ reportDate を流用（YYYY/MM/DD 形式に正規化）
         var ymd2slash = function (s) { return String(s || '').replace(/-/g, '/'); };
         var ps = ymd2slash(r.periodStart || r.reportDate || Store.today);
         var pe = ymd2slash(r.periodEnd   || r.reportDate || Store.today);
@@ -1344,11 +1318,6 @@
       });
     },
 
-    /**
-     * モーダル本文プレビュー用の表示文字列を生成する。
-     * これは UI プレビュー専用の文字列であり、最終的な本文整形は EXE 側で行う（仕様 §7.4.7）。
-     * 仕様書フォーマットを忠実に再現する。
-     */
     _buildMailBody: function (staff) {
       var reports = Store.reports[staff.id] || [];
       var today   = Store.today;
@@ -1374,7 +1343,6 @@
         }).join('\n');
       }
 
-      // 本文プレビュー（件名は別途バッジ等で表示するためここでは含めない）
       return 'お疲れ様です。' + staff.name + ' です。\n' +
         '本日の業務をご報告いたします。\n\n' +
         '▼ 本日の作業内容\n' + formatItems(todayItems) + '\n\n' +
@@ -1386,8 +1354,6 @@
       var staff = this._currentStaff;
       if (!staff) return;
 
-      // 仕様 §7.4.2 ② 登録時のメール整合性チェック（クライアント側予防策）。
-      // 本来の真偽はサーバ側 enqueueMailRequest で行うが、UX 改善のためここでも一次検査する。
       if (!staff.email) {
         toast('このスタッフのメールアドレスが未設定です。Staff シートで設定してください。', 'err');
         return;
@@ -1415,8 +1381,6 @@
             if (result && result.success) {
               toast('再送依頼を登録しました（ID: ' + result.newId + '）', 'ok');
               self.close();
-              // KPI / カードの状態表示を即時更新
-              renderKPIs();
               getDailyReportsForDate(Store.today);
             } else {
               toast('再送失敗: ' + (result ? result.reason : '不明'), 'err');
@@ -1428,14 +1392,11 @@
           })
           .retryMailItem(this._originalMailId);
       } else {
-        // 仕様 §7.4.7 準拠の構造化 subjectVars / bodyVars を生成して送信
         var reports = Store.reports[staff.id] || [];
         var todayReps = reports.filter(function (r) { return r.reportDate === Store.today && r.section === 'today'; });
         var prevReps  = reports.filter(function (r) { return r.section === 'prev' || r.section === 'yesterday'; });
 
-        // reportDate は仕様 §7.4.7 の例に合わせ "YYYY/MM/DD" 形式（EXE 側はそのまま流し込む）
         var rdSlash = String(Store.today).replace(/-/g, '/');
-
         var subjectVars = {
           staffName:  staff.name || '',
           reportDate: rdSlash
@@ -1464,8 +1425,6 @@
             if (result && result.success) {
               toast('メール依頼を登録しました', 'ok');
               self.close();
-              // KPI / カードの状態表示を即時更新
-              renderKPIs();
               getDailyReportsForDate(Store.today);
             } else {
               toast('登録失敗: ' + (result ? result.reason : '不明'), 'err');
@@ -1487,21 +1446,14 @@
   var Heartbeat = {
     _lastSeen: null,
     _timer:    null,
-    DEAD_THRESHOLD_MS: 5 * 60 * 1000,  // 5分
+    DEAD_THRESHOLD_MS: 5 * 60 * 1000,
 
     init: function () {
       var self = this;
-      // 30 秒ごとに Settings.LAST_HEARTBEAT_TIMESTAMP をフェッチして表示更新
       this._timer = setInterval(function () { self._fetchAndUpdate(); }, 30000);
       this._fetchAndUpdate();
     },
 
-    record: function (ts) {
-      this._lastSeen = ts ? new Date(ts) : new Date();
-      this._update();
-    },
-
-    /** GAS の Settings.LAST_HEARTBEAT_TIMESTAMP をフェッチして UI を更新する */
     _fetchAndUpdate: function () {
       var self = this;
       try {
@@ -1515,10 +1467,6 @@
       } catch (_e) {
         self._update();
       }
-    },
-
-    _check: function () {
-      this._update();
     },
 
     _update: function () {
@@ -1552,54 +1500,6 @@
   // ════════════════════════════════════════════════════════════════
 
   function initControls() {
-    // ガント日幅セレクト
-    var dw = document.getElementById('gantt-day-width');
-    if (dw) {
-      dw.addEventListener('change', function () {
-        Store.dayWidth = +this.value;
-        GanttView.dayWidth = +this.value;
-        GanttView.render();
-        GanttView.renderBars();
-      });
-    }
-
-    // 前月ボタン
-    var prevBtn = document.getElementById('btn-prev-month');
-    if (prevBtn) {
-      prevBtn.addEventListener('click', function () {
-        var d = parseDate(Store.viewDate);
-        d.setMonth(d.getMonth() - 1);
-        Store.viewDate = toYMD(d);
-        Store.ganttStart = offsetDate(Store.viewDate, -30);
-        Store.ganttEnd   = offsetDate(Store.viewDate, 90);
-        reloadGantt();
-      });
-    }
-
-    // 本日ボタン
-    var todayBtn = document.getElementById('btn-today');
-    if (todayBtn) {
-      todayBtn.addEventListener('click', function () {
-        Store.viewDate   = Store.today;
-        Store.ganttStart = offsetDate(Store.today, -30);
-        Store.ganttEnd   = offsetDate(Store.today, 90);
-        reloadGantt();
-      });
-    }
-
-    // 次月ボタン
-    var nextBtn = document.getElementById('btn-next-month');
-    if (nextBtn) {
-      nextBtn.addEventListener('click', function () {
-        var d = parseDate(Store.viewDate);
-        d.setMonth(d.getMonth() + 1);
-        Store.viewDate = toYMD(d);
-        Store.ganttStart = offsetDate(Store.viewDate, -30);
-        Store.ganttEnd   = offsetDate(Store.viewDate, 90);
-        reloadGantt();
-      });
-    }
-
     // メールモーダル閉じる
     ['mail-modal-close', 'mail-modal-cancel'].forEach(function (id) {
       var btn = document.getElementById(id);
@@ -1656,7 +1556,6 @@
       });
     }
 
-    // 工番オートコンプリート情報更新
     var geKoban = document.getElementById('ge-koban');
     if (geKoban) {
       geKoban.addEventListener('input', function () {
@@ -1664,30 +1563,12 @@
       });
     }
 
-    // Escキーでモーダルを閉じる
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape') {
         MailModal.close();
         GanttEditModal.close();
       }
     });
-  }
-
-  function reloadGantt() {
-    var start = Store.ganttStart;
-    var end   = Store.ganttEnd;
-    buildGanttDays();
-    GanttView.render();
-
-    google.script.run
-      .withSuccessHandler(function (schedules) {
-        Store.schedules = schedules || [];
-        GanttView.renderBars();
-      })
-      .withFailureHandler(function (err) {
-        toast('スケジュールの再読み込みに失敗しました', 'err');
-      })
-      .getSchedules(start, end);
   }
 
 })();

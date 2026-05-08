@@ -352,7 +352,8 @@ function deleteSchedule(id) {
  */
 function getDailyReports(staffId, reportDate) {
   return listAll(SHEET_NAMES.DAILY_REPORTS).filter(r =>
-    r.staffId === staffId && r.reportDate === reportDate
+    String(r.staffId) === String(staffId) &&
+    String(r.reportDate) === String(reportDate)
   );
 }
 
@@ -364,16 +365,36 @@ function getDailyReports(staffId, reportDate) {
  * @returns {string|boolean} 新規追加: 生成 id / 更新: true
  */
 function upsertDailyReport(record) {
+  // seq は数値・文字列どちらで渡されても一致するよう文字列比較する
+  const seqStr = String(record.seq);
   const existing = getDailyReports(record.staffId, record.reportDate)
-    .find(r => r.seq === record.seq && r.section === record.section);
+    .find(r => String(r.seq) === seqStr && r.section === record.section);
   if (existing) {
-    // 検索キーと id は更新対象から除外（既存行の id 保護）
-    const { id: _ignored, ...updates } = record;
+    // 検索キー（staffId/reportDate/section/seq）も updates に含まれるが値不変のため問題なし
+    // id だけは既存行の id を保護するため除外
+    const updates = {};
+    Object.keys(record).forEach(function(k) {
+      if (k !== 'id') updates[k] = record[k];
+    });
     return updateRow_(SHEET_NAMES.DAILY_REPORTS, existing.id, updates);
   } else {
     record.id = generateId_('dr');
     return appendRow_(SHEET_NAMES.DAILY_REPORTS, record);
   }
+}
+
+/**
+ * 指定日付の全スタッフ分 DailyReport 行を返す。
+ * UI が1日の全スタッフ日報を一括取得する際に使用する（スタッフ数分の個別呼び出しを1回に削減）。
+ *
+ * @param {string} reportDate - YYYY-MM-DD
+ * @returns {Object[]}
+ * @note 内部で listAll を使用。DailyReports が数千行規模になった場合は最適化要検討。
+ */
+function getDailyReportsByDate(reportDate) {
+  return listAll(SHEET_NAMES.DAILY_REPORTS).filter(r =>
+    String(r.reportDate) === String(reportDate)
+  );
 }
 
 // ── Staff ─────────────────────────────────────────────────────
