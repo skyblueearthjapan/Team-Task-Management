@@ -156,8 +156,9 @@ function buildMailBody(params) {
   }
   params = params || {};
 
-  // 挨拶は常に「関係各位」に固定（G: ユーザー追加要件 #2）
-  var greeting    = '関係各位';
+  // 挨拶は 2 段固定: 1 行目「田村社長」、2 行目「関係各位」
+  // （params.greeting / bodyVars.greeting は無視）
+  var greetingLines = ['田村社長', '関係各位'];
   var staffName   = params.staffName       || '';
   var todayItems  = params.todayItems      || [];
   // prevItems を正式キーとし、yesterdayItems を後方互換フォールバックとして受け付ける
@@ -168,11 +169,9 @@ function buildMailBody(params) {
 
   var lines = [];
 
-  // 挨拶
-  if (greeting) {
-    lines.push(greeting);
-    lines.push('');
-  }
+  // 挨拶（2 段: 田村社長 / 関係各位）
+  greetingLines.forEach(function (g) { if (g) lines.push(g); });
+  lines.push('');
 
   lines.push('お疲れ様です。' + staffName + ' です。');
   lines.push('本日の業務をご報告いたします。');
