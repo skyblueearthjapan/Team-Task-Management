@@ -44,6 +44,8 @@ function doGet(e) {
   }
 
   const tpl = HtmlService.createTemplateFromFile('index');
+  // ヘッダの「社内ポータルへ移動」ボタン用 URL（参考リポジトリ Electrical-Work-Scheduling と同一）
+  tpl.PORTAL_URL = 'https://script.google.com/a/macros/lineworks-local.info/s/AKfycbx2eyJMOYP9o--GPBuhY-pj071IIR6Kqb_0xALwwNzdLQZux0dIAlL3P9EoCucnzXA/exec?pli=1';
   return tpl.evaluate()
     .setTitle('技術部タスク管理')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
