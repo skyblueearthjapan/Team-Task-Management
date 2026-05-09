@@ -1169,13 +1169,19 @@
       var pill = isToday
         ? '<span class="pill pill-accent">' + esc(periodLabel) + '</span>'
         : '<span class="pill">' + esc(periodLabel) + '</span>';
-      var koban = r.kobanCode ? '<b class="mono" style="font-weight:600">' + esc(r.kobanCode) + '</b> ' : '';
       // CRITICAL FIX: detail を最優先（Backend スキーマ列名）。workTypeId から workTypes マスタを引いて補完
       var wt = r.workTypeId ? Store.workTypes.find(function (w) { return w.id === r.workTypeId; }) : null;
       var wtNameRaw = r.detail || r.workTypeName || r.note || (wt ? wt.name : '');
       var wtName = esc(wtNameRaw);
       var barCls = r.kobanCode ? Store.kobanColor(r.kobanCode) : 'bar-stone';
       var swatch = '<span class="swatch ' + barCls + '"' + (isToday ? '' : ' style="opacity:.5"') + '></span>';
+      // 工番マスタから受注先・品名を引き当て
+      var kobanInfo = (r.kobanCode && Store.kobanList)
+        ? Store.kobanList.find(function (k) { return k['工番'] === r.kobanCode; })
+        : null;
+      var customer    = kobanInfo ? (kobanInfo['受注先'] || '') : '';
+      var productName = kobanInfo ? (kobanInfo['品名']   || '') : '';
+      var kobanInfoTitle = escAttr([r.kobanCode, customer, productName].filter(Boolean).join(' '));
 
       // Issue 6/C: 操作ボタン
       var actionBtn = '';
@@ -1195,9 +1201,18 @@
           '<button class="btn-del-row" data-seq="' + escAttr(String(r.seq)) + '" data-staff-id="' + escAttr(r.staffId) + '" title="削除" style="font-size:10px;padding:2px 6px;border:1px solid rgba(161,59,42,.3);border-radius:4px;background:var(--bg-panel);cursor:pointer;color:var(--err)">×</button>';
       }
 
+      // 工番情報行（工番がある場合のみ表示）
+      var kobanLineHtml = '';
+      if (r.kobanCode) {
+        var kobanText = esc(r.kobanCode) + (customer ? ' ' + esc(customer) : '') + (productName ? ' ' + esc(productName) : '');
+        kobanLineHtml = '<span class="row-koban-info" title="' + kobanInfoTitle + '">' + kobanText + '</span>';
+      }
+      // 作業内容行（duration + 作業名）
+      var workLineHtml = '<span class="row-work-info">' + durLabel + wtName + '</span>';
+
       return '<div class="row-line">' +
         '<span class="flex-shrink-0">' + pill + '</span>' +
-        '<span class="truncate">' + durLabel + koban + wtName + '</span>' +
+        '<span class="row-content">' + kobanLineHtml + workLineHtml + '</span>' +
         '<span class="flex items-center gap-1">' + swatch + actionBtn + '</span>' +
         '</div>';
     },
