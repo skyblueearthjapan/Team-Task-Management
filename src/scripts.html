@@ -837,7 +837,8 @@
             kobanInput.value = sch.kobanCode;
           }
         } else {
-          kobanInput.value = '（一般作業）';
+          // 新規追加: 既定は空（ユーザーに選択を促す）
+          kobanInput.value = '';
         }
         this._updateKobanInfo(sch.kobanCode);
       }
