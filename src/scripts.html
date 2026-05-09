@@ -1278,17 +1278,40 @@
     // Issue 6: 行削除（section='prev' または 'today'）
     _deleteRow: function (staffId, seq, section) {
       if (!Store.reports[staffId]) return;
+
+      // 1. 削除対象の行を先に特定（linkedScheduleId 取得のため）
+      var target = Store.reports[staffId].find(function (r) {
+        if (String(r.seq) !== String(seq)) return false;
+        if (section === 'today') return r.section === 'today';
+        return r.section === 'prev' || r.section === 'yesterday';
+      });
+
+      // 2. ローカル Store から該当行を除外
       Store.reports[staffId] = Store.reports[staffId].filter(function (r) {
-        if (String(r.seq) !== String(seq)) return true;
-        if (section === 'today') return r.section !== 'today';
-        return r.section !== 'prev' && r.section !== 'yesterday';
+        return r !== target;
       });
       ReportView.render();
+
+      // 3. 業務報告のサーバ削除
       google.script.run
         .withFailureHandler(function (err) {
           toast('行削除のサーバ反映に失敗しました: ' + String(err.message || err), 'err');
         })
         .deleteDailyReportBySeq(staffId, Store.today, section, seq);
+
+      // 4. linkedScheduleId があればガント側も削除（連動）
+      if (target && target.linkedScheduleId) {
+        var scheduleId = target.linkedScheduleId;
+        Store.schedules = (Store.schedules || []).filter(function (s) {
+          return s.id !== scheduleId;
+        });
+        GanttView.renderBars();
+        google.script.run
+          .withFailureHandler(function (err) {
+            toast('ガント連動削除に失敗しました: ' + String(err.message || err), 'err');
+          })
+          .deleteSchedule(scheduleId);
+      }
     },
 
     // Issue 6: 本日行を前日へコピー（元行は残す）
