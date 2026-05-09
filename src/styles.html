@@ -483,4 +483,99 @@
     min-width: 0;
     overflow: hidden;
   }
+
+  /* AI プレビュー: 編集可能な行 */
+  .ai-entry-row {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 6px 8px;
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--bg-soft);
+    margin-bottom: 6px;
+    align-items: start;
+  }
+  .ai-entry-row.removed {
+    opacity: 0.45;
+  }
+  .ai-entry-row.removed .row-form input,
+  .ai-entry-row.removed .row-form select {
+    text-decoration: line-through;
+    pointer-events: none;
+  }
+  .ai-entry-row .btn-remove {
+    width: 28px; height: 28px;
+    border: 1px solid var(--line-2);
+    border-radius: 6px;
+    background: var(--bg-panel);
+    cursor: pointer;
+    font-size: 14px;
+    color: var(--txt-2);
+    display: flex; align-items: center; justify-content: center;
+    padding: 0;
+    line-height: 1;
+  }
+  .ai-entry-row .btn-remove:hover { border-color: var(--line-3); color: var(--txt-1); }
+  .ai-entry-row .btn-remove.restore { color: var(--accent, #b35a3a); }
+  .ai-entry-row .row-form {
+    display: grid;
+    grid-template-columns: 1.4fr 1fr 1fr 1fr;
+    gap: 4px 6px;
+    min-width: 0;
+  }
+  .ai-entry-row .row-form .field-koban    { grid-column: 1 / span 2; }
+  .ai-entry-row .row-form .field-customer { grid-column: 3 / span 2; }
+  .ai-entry-row .row-form .field-worktype { grid-column: 1 / span 1; }
+  .ai-entry-row .row-form .field-pstart   { grid-column: 2 / span 1; }
+  .ai-entry-row .row-form .field-pend     { grid-column: 3 / span 1; }
+  .ai-entry-row .row-form .field-duration { grid-column: 4 / span 1; }
+  .ai-entry-row .row-form .field-detail   { grid-column: 1 / span 4; }
+  .ai-entry-row .row-form input,
+  .ai-entry-row .row-form select {
+    background: var(--bg-panel);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 4px 6px;
+    font-size: 12px;
+    font-family: "Inter", "Noto Sans JP", sans-serif;
+    color: var(--txt-1);
+    width: 100%;
+    box-sizing: border-box;
+    height: 28px;
+  }
+  .ai-entry-row .row-form input:focus,
+  .ai-entry-row .row-form select:focus { outline: none; border-color: var(--accent, #b35a3a); }
+  .ai-entry-row .row-form input[readonly] {
+    background: transparent;
+    border-color: transparent;
+    color: var(--txt-2);
+    font-size: 11px;
+  }
+  .ai-entry-row .row-meta {
+    grid-column: 1 / -1;
+    font-size: 10.5px;
+    color: var(--txt-3);
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .ai-entry-row .row-meta .conf-pill {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: var(--bg-elev, #ece4d2);
+    color: var(--txt-2);
+  }
+  @media (max-width: 600px) {
+    .ai-entry-row .row-form { grid-template-columns: 1fr 1fr; }
+    .ai-entry-row .row-form .field-koban,
+    .ai-entry-row .row-form .field-customer,
+    .ai-entry-row .row-form .field-detail { grid-column: 1 / -1; }
+    .ai-entry-row .row-form .field-worktype { grid-column: 1 / span 2; }
+    .ai-entry-row .row-form .field-pstart,
+    .ai-entry-row .row-form .field-pend,
+    .ai-entry-row .row-form .field-duration { grid-column: auto; }
+  }
 </style>

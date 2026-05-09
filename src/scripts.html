@@ -2436,6 +2436,238 @@
   };
 
   // ════════════════════════════════════════════════════════════════
+  // N-pre. AI プレビュー用の共通ヘルパ（編集可能 + × ボタン）
+  // ════════════════════════════════════════════════════════════════
+
+  /**
+   * AI プレビュー: 編集可能な行を生成して container に描画する。
+   * 各エントリに × ボタンで除外（取り消し線）/ 復元、フォームで直接編集可能。
+   *
+   * @param {HTMLElement} container - 描画先（先に innerHTML='' する）
+   * @param {Array} entries - AI が返したエントリ配列（mutable; UI 編集で書き換わる）
+   * @param {Array} workTypes - Store.workTypes 相当
+   * @param {Array} kobanMaster - Store.kobanList（'工番'/'受注先'/'品名' キー）
+   * @param {Object} [opts] - { onCountChange?: function(activeCount) }
+   * @returns {Function} getActiveEntries() - 編集後 / 除外を除いた entries を返す
+   */
+  function buildEditablePreview(container, entries, workTypes, kobanMaster, opts) {
+    opts = opts || {};
+    container.innerHTML = '';
+
+    // datalist は container 内に 1 つだけ作成（複数行で再利用）
+    var dlId = 'ai-koban-dl-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+    var dl = document.createElement('datalist');
+    dl.id = dlId;
+    dl.innerHTML = (kobanMaster || []).map(function (k) {
+      var display = k['工番'] + (k['受注先'] ? '  ' + k['受注先'] : '') + (k['品名'] ? '  ' + k['品名'] : '');
+      return '<option value="' + escAttr(display) + '"></option>';
+    }).join('');
+    container.appendChild(dl);
+
+    // 工番コードで master を検索（正規化照合）
+    function findKobanByCode(code) {
+      if (!code) return null;
+      var n = normalizeKobanCode(code);
+      return (kobanMaster || []).find(function (k) { return normalizeKobanCode(k['工番']) === n; }) || null;
+    }
+    // datalist の value（「工番  受注先  品名」）から先頭トークンを抽出して master 照合
+    function extractKobanCode(val) {
+      if (!val) return '';
+      var raw = String(val).split(/\s+/)[0].trim();
+      var n = normalizeKobanCode(raw);
+      if (!n) return '';
+      var found = findKobanByCode(n);
+      return found ? found['工番'] : raw; // master に無くても入力値は保持（既存挙動）
+    }
+
+    function activeCount() {
+      return entries.reduce(function (acc, e) { return acc + (e && e._removed ? 0 : 1); }, 0);
+    }
+    function emitCount() {
+      if (typeof opts.onCountChange === 'function') opts.onCountChange(activeCount());
+    }
+
+    entries.forEach(function (e, i) {
+      var row = document.createElement('div');
+      row.className = 'ai-entry-row';
+      row.setAttribute('data-index', String(i));
+
+      // × / 復元 ボタン
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn-remove';
+      btn.title = '除外する';
+      btn.textContent = '×';
+      btn.addEventListener('click', function () {
+        e._removed = !e._removed;
+        if (e._removed) {
+          row.classList.add('removed');
+          btn.textContent = '↺';
+          btn.title = '復元する';
+          btn.classList.add('restore');
+        } else {
+          row.classList.remove('removed');
+          btn.textContent = '×';
+          btn.title = '除外する';
+          btn.classList.remove('restore');
+        }
+        emitCount();
+      });
+      row.appendChild(btn);
+
+      // 行右側のフォーム
+      var form = document.createElement('div');
+      form.className = 'row-form';
+
+      // 工番 input + datalist
+      var kobanWrap = document.createElement('div');
+      kobanWrap.className = 'field-koban';
+      var kobanInput = document.createElement('input');
+      kobanInput.type = 'text';
+      kobanInput.setAttribute('list', dlId);
+      kobanInput.setAttribute('autocomplete', 'off');
+      kobanInput.placeholder = '工番（番号・受注先・品名で検索）';
+      // 既存値を復元（master に存在すれば「コード  受注先  品名」表示）
+      if (e.kobanCode) {
+        var m = findKobanByCode(e.kobanCode);
+        kobanInput.value = m
+          ? (m['工番'] + (m['受注先'] ? '  ' + m['受注先'] : '') + (m['品名'] ? '  ' + m['品名'] : ''))
+          : e.kobanCode;
+      } else {
+        kobanInput.value = '';
+      }
+      kobanWrap.appendChild(kobanInput);
+
+      // 受注先表示（自動補完。読み取り専用）
+      var custWrap = document.createElement('div');
+      custWrap.className = 'field-customer';
+      var custInput = document.createElement('input');
+      custInput.type = 'text';
+      custInput.readOnly = true;
+      custInput.tabIndex = -1;
+      custInput.placeholder = '受注先 / 品名（自動）';
+      custWrap.appendChild(custInput);
+
+      function refreshCustomerDisplay() {
+        var code = extractKobanCode(kobanInput.value);
+        var m = findKobanByCode(code);
+        if (m) {
+          custInput.value = (m['受注先'] || '') + (m['品名'] ? ' / ' + m['品名'] : '');
+        } else {
+          custInput.value = code ? '（マスタ外）' : '';
+        }
+      }
+      refreshCustomerDisplay();
+      kobanInput.addEventListener('input', function () {
+        var code = extractKobanCode(kobanInput.value);
+        e.kobanCode = code || '';
+        refreshCustomerDisplay();
+      });
+      kobanInput.addEventListener('change', function () {
+        var code = extractKobanCode(kobanInput.value);
+        e.kobanCode = code || '';
+        refreshCustomerDisplay();
+      });
+
+      // 作業種別 select
+      var wtWrap = document.createElement('div');
+      wtWrap.className = 'field-worktype';
+      var wtSel = document.createElement('select');
+      wtSel.innerHTML = '<option value="">作業種別…</option>' +
+        (workTypes || []).map(function (w) {
+          var sel = (w.id === e.workTypeId) ? ' selected' : '';
+          return '<option value="' + escAttr(w.id) + '"' + sel + '>' + esc(w.name) + '</option>';
+        }).join('');
+      wtSel.addEventListener('change', function () {
+        e.workTypeId = wtSel.value || null;
+        var w = (workTypes || []).find(function (x) { return x.id === wtSel.value; });
+        e.workTypeName = w ? w.name : '';
+      });
+      wtWrap.appendChild(wtSel);
+
+      // 期間開始 / 終了
+      var psWrap = document.createElement('div');
+      psWrap.className = 'field-pstart';
+      var psInput = document.createElement('input');
+      psInput.type = 'date';
+      psInput.value = e.periodStart || '';
+      psInput.title = '期間開始';
+      psInput.addEventListener('change', function () { e.periodStart = psInput.value || null; });
+      psWrap.appendChild(psInput);
+
+      var peWrap = document.createElement('div');
+      peWrap.className = 'field-pend';
+      var peInput = document.createElement('input');
+      peInput.type = 'date';
+      peInput.value = e.periodEnd || '';
+      peInput.title = '期間終了';
+      peInput.addEventListener('change', function () { e.periodEnd = peInput.value || null; });
+      peWrap.appendChild(peInput);
+
+      // 工数
+      var durWrap = document.createElement('div');
+      durWrap.className = 'field-duration';
+      var durInput = document.createElement('input');
+      durInput.type = 'text';
+      durInput.value = e.duration || '';
+      durInput.placeholder = '工数';
+      durInput.addEventListener('input', function () { e.duration = durInput.value || null; });
+      durWrap.appendChild(durInput);
+
+      // 詳細
+      var detWrap = document.createElement('div');
+      detWrap.className = 'field-detail';
+      var detInput = document.createElement('input');
+      detInput.type = 'text';
+      detInput.value = e.detail || '';
+      detInput.placeholder = '詳細 / 作業内容';
+      detInput.addEventListener('input', function () { e.detail = detInput.value || null; });
+      detWrap.appendChild(detInput);
+
+      form.appendChild(kobanWrap);
+      form.appendChild(custWrap);
+      form.appendChild(wtWrap);
+      form.appendChild(psWrap);
+      form.appendChild(peWrap);
+      form.appendChild(durWrap);
+      form.appendChild(detWrap);
+
+      // メタ情報（# + confidence）
+      var meta = document.createElement('div');
+      meta.className = 'row-meta';
+      var idxSpan = document.createElement('span');
+      idxSpan.textContent = '#' + (i + 1);
+      meta.appendChild(idxSpan);
+      if (e.confidence != null) {
+        var conf = document.createElement('span');
+        conf.className = 'conf-pill';
+        conf.textContent = Math.round(e.confidence * 100) + '%';
+        meta.appendChild(conf);
+      }
+      if (e.reasoning) {
+        var why = document.createElement('span');
+        why.textContent = e.reasoning;
+        why.style.flex = '1';
+        why.style.minWidth = '0';
+        why.style.overflow = 'hidden';
+        why.style.textOverflow = 'ellipsis';
+        why.style.whiteSpace = 'nowrap';
+        meta.appendChild(why);
+      }
+
+      row.appendChild(form);
+      row.appendChild(meta);
+      container.appendChild(row);
+    });
+
+    emitCount();
+
+    return function getActiveEntries() {
+      return entries.filter(function (e) { return e && !e._removed; });
+    };
+  }
+
+  // ════════════════════════════════════════════════════════════════
   // N. AiAssistModal（カード単位 AI 補助モーダル）
   // ════════════════════════════════════════════════════════════════
 
@@ -2446,6 +2678,7 @@
     open: function (s) {
       this._staff   = s;
       this._entries = [];
+      this._getActiveEntries = null;
       var modal = document.getElementById('ai-assist-modal');
       if (!modal) return;
       var nameEl = document.getElementById('ai-assist-staff-name');
@@ -2463,6 +2696,7 @@
       if (modal) modal.classList.remove('open');
       this._staff   = null;
       this._entries = [];
+      this._getActiveEntries = null;
     },
 
     parse: function () {
@@ -2511,33 +2745,39 @@
     _renderPreview: function (entries) {
       var container = document.getElementById('ai-assist-entries');
       if (!container) return;
-      container.innerHTML = entries.map(function (e, i) {
-        var koban    = e.kobanCode    ? '<b class="mono">' + esc(e.kobanCode) + '</b> ' : '';
-        var customer = e.customer     ? esc(e.customer) + ' ' : '';
-        var product  = e.productName  ? esc(e.productName) + ' ' : '';
-        var wt = e.workTypeId ? Store.workTypes.find(function(w){return w.id === e.workTypeId;}) : null;
-        var wtype = esc(e.detail || (wt ? wt.name : ''));
-        var dur      = e.duration     ? '<span class="pill" style="font-size:10px;padding:1px 6px">' + esc(e.duration) + '</span>' : '';
-        var period   = e.periodStart
-          ? '<span class="pill" style="font-size:10px;padding:1px 6px">' + esc(String(e.periodStart).slice(5).replace('-', '/')) + (e.periodEnd && e.periodEnd !== e.periodStart ? '〜' + esc(String(e.periodEnd).slice(5).replace('-', '/')) : '') + '</span>'
-          : '';
-        var confStr  = e.confidence != null ? '<span style="color:var(--txt-3);font-size:10.5px">' + Math.round(e.confidence * 100) + '%</span>' : '';
-        return '<div style="padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg-soft);display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
-          '<span style="font-size:10.5px;color:var(--txt-3)">' + (i + 1) + '.</span>' +
-          period + dur + koban + customer + product + wtype + confStr +
-          '</div>';
-      }).join('');
+      var self = this;
+      this._getActiveEntries = buildEditablePreview(
+        container, entries, Store.workTypes || [], Store.kobanList || [],
+        { onCountChange: function (n) { self._updateButtonLabels(n); } }
+      );
       var preview = document.getElementById('ai-assist-preview');
       if (preview) preview.style.display = '';
+    },
+
+    _updateButtonLabels: function (count) {
+      var n = (typeof count === 'number')
+        ? count
+        : (this._getActiveEntries ? this._getActiveEntries().length : (this._entries || []).length);
+      var labels = [
+        ['ai-assist-add-today', '本日に追加'],
+        ['ai-assist-add-prev',  '前日に追加'],
+        ['ai-assist-add-gantt', 'ガントに追加']
+      ];
+      labels.forEach(function (pair) {
+        var btn = document.getElementById(pair[0]);
+        if (btn) btn.textContent = pair[1] + '（' + n + ' 件）';
+      });
     },
 
     // entries を report 行形式に変換してStore に追加
     _addEntriesToReport: function (section) {
       var s = this._staff;
       if (!s || !this._entries.length) return;
+      var active = this._getActiveEntries ? this._getActiveEntries() : this._entries;
+      if (!active.length) { toast('追加対象がありません', 'warn'); return; }
       if (!Store.reports[s.id]) Store.reports[s.id] = [];
 
-      this._entries.forEach(function (e) {
+      active.forEach(function (e) {
         var reportDate = e.periodStart ? toYMD(parseDate(e.periodStart)) : Store.today;
         var record = {
           staffId:      s.id,
@@ -2566,15 +2806,17 @@
       });
 
       ReportView.render();
-      toast(this._entries.length + ' 件を追加しました', 'ok');
+      toast(active.length + ' 件を追加しました', 'ok');
       this.close();
     },
 
     addToGantt: function () {
       var s = this._staff;
       if (!s || !this._entries.length) return;
+      var active = this._getActiveEntries ? this._getActiveEntries() : this._entries;
+      if (!active.length) { toast('追加対象がありません', 'warn'); return; }
 
-      this._entries.forEach(function (e) {
+      active.forEach(function (e) {
         var startDate = e.periodStart ? toYMD(parseDate(e.periodStart)) : Store.today;
         var endDate   = e.periodEnd   ? toYMD(parseDate(e.periodEnd))   : startDate;
 
@@ -2611,7 +2853,7 @@
           .createSchedule(schRecord);
       });
 
-      toast(this._entries.length + ' 件をガントに追加しました', 'ok');
+      toast(active.length + ' 件をガントに追加しました', 'ok');
       this.close();
     }
   };
@@ -2625,6 +2867,7 @@
 
     open: function () {
       this._entries = [];
+      this._getActiveEntries = null;
       var modal = document.getElementById('ai-mode-modal');
       if (!modal) return;
 
@@ -2654,6 +2897,7 @@
       var modal = document.getElementById('ai-mode-modal');
       if (modal) modal.classList.remove('open');
       this._entries = [];
+      this._getActiveEntries = null;
     },
 
     parse: function () {
@@ -2695,31 +2939,37 @@
     _renderPreview: function (entries) {
       var container = document.getElementById('ai-mode-entries');
       if (!container) return;
-      container.innerHTML = entries.map(function (e, i) {
-        var koban    = e.kobanCode    ? '<b class="mono">' + esc(e.kobanCode) + '</b> ' : '';
-        var customer = e.customer     ? esc(e.customer) + ' ' : '';
-        var product  = e.productName  ? esc(e.productName) + ' ' : '';
-        var wt = e.workTypeId ? Store.workTypes.find(function(w){return w.id === e.workTypeId;}) : null;
-        var wtype = esc(e.detail || (wt ? wt.name : ''));
-        var dur      = e.duration     ? '<span class="pill" style="font-size:10px;padding:1px 6px">' + esc(e.duration) + '</span>' : '';
-        var period   = e.periodStart
-          ? '<span class="pill" style="font-size:10px;padding:1px 6px">' + esc(String(e.periodStart).slice(5).replace('-', '/')) + (e.periodEnd && e.periodEnd !== e.periodStart ? '〜' + esc(String(e.periodEnd).slice(5).replace('-', '/')) : '') + '</span>'
-          : '';
-        return '<div style="padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg-soft);display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
-          '<span style="font-size:10.5px;color:var(--txt-3)">' + (i + 1) + '.</span>' +
-          period + dur + koban + customer + product + wtype +
-          '</div>';
-      }).join('');
+      var self = this;
+      this._getActiveEntries = buildEditablePreview(
+        container, entries, Store.workTypes || [], Store.kobanList || [],
+        { onCountChange: function (n) { self._updateButtonLabels(n); } }
+      );
       var preview = document.getElementById('ai-mode-preview');
       if (preview) preview.style.display = '';
+    },
+
+    _updateButtonLabels: function (count) {
+      var n = (typeof count === 'number')
+        ? count
+        : (this._getActiveEntries ? this._getActiveEntries().length : (this._entries || []).length);
+      var labels = [
+        ['ai-mode-add-gantt',  'ガントに追加'],
+        ['ai-mode-add-report', '業務報告に追加']
+      ];
+      labels.forEach(function (pair) {
+        var btn = document.getElementById(pair[0]);
+        if (btn) btn.textContent = pair[1] + '（' + n + ' 件）';
+      });
     },
 
     addToGantt: function () {
       var staffSel = document.getElementById('ai-mode-staff');
       var staffId  = staffSel ? staffSel.value : '';
       if (!staffId || !this._entries.length) return;
+      var active = this._getActiveEntries ? this._getActiveEntries() : this._entries;
+      if (!active.length) { toast('追加対象がありません', 'warn'); return; }
 
-      this._entries.forEach(function (e) {
+      active.forEach(function (e) {
         var startDate = e.periodStart ? toYMD(parseDate(e.periodStart)) : Store.today;
         var endDate   = e.periodEnd   ? toYMD(parseDate(e.periodEnd))   : startDate;
 
@@ -2756,7 +3006,7 @@
           .createSchedule(schRecord);
       });
 
-      toast(this._entries.length + ' 件をガントに追加しました', 'ok');
+      toast(active.length + ' 件をガントに追加しました', 'ok');
       this.close();
     },
 
@@ -2764,9 +3014,11 @@
       var staffSel = document.getElementById('ai-mode-staff');
       var staffId  = staffSel ? staffSel.value : '';
       if (!staffId || !this._entries.length) return;
+      var active = this._getActiveEntries ? this._getActiveEntries() : this._entries;
+      if (!active.length) { toast('追加対象がありません', 'warn'); return; }
       if (!Store.reports[staffId]) Store.reports[staffId] = [];
 
-      this._entries.forEach(function (e) {
+      active.forEach(function (e) {
         var record = {
           staffId:      staffId,
           reportDate:   Store.today,
@@ -2793,7 +3045,7 @@
       });
 
       ReportView.render();
-      toast(this._entries.length + ' 件を業務報告に追加しました', 'ok');
+      toast(active.length + ' 件を業務報告に追加しました', 'ok');
       this.close();
     }
   };

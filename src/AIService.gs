@@ -325,7 +325,15 @@ function _callGemini_(systemPrompt, userText, responseSchema) {
  * @returns {string}
  */
 function buildParseSystemPrompt_(referenceDate, workTypes) {
-  // ユーザー要件: タイトル名を「技術部」に統一（旧「機械設計技術部」表記を削除）
+  // few-shot 例の日付を referenceDate からの相対オフセットで生成する。
+  // 旧実装はハードコードの 5/10 / 5/13 / 5/15 を使っていたが、基準日が 2026-05 以外の
+  // ときに「例文の日付に引きずられる」ハルシネーション要因になっていた。
+  var shotBase = parseDateLocal_(referenceDate);
+  var d1 = formatYmd_(shotBase, 1);  // 基準日 +1
+  var d2 = formatYmd_(shotBase, 3);  // 基準日 +3
+  var d3 = formatYmd_(shotBase, 4);  // 基準日 +4
+  var d4 = formatYmd_(shotBase, 5);  // 基準日 +5
+
   return 'あなたは技術部のスタッフを補助するアシスタントです。\n' +
     '基準日: ' + referenceDate + '（YYYY-MM-DD）\n\n' +
     'WorkTypes 一覧（id, name, displayOrder）:\n' +
@@ -337,11 +345,72 @@ function buildParseSystemPrompt_(referenceDate, workTypes) {
     '- 工番らしき文字列（例: LW23012, K-12345）が含まれていれば kobanCode に抽出\n' +
     '- 工番が含まれない / 不明確な場合は kobanCode を null に\n' +
     '- WorkTypes は name で完全一致 → なければ最も近い意味のものを選ぶ → 不明なら workTypeId を null\n' +
+    '- workTypeId は必ず WorkTypes 一覧の id 値そのものを使う（プレースホルダ文字列は禁止）\n' +
     '- 確信が低い項目は confidence を低く設定（0〜1）\n' +
     '- 複数の作業が記述されている場合は entries を複数件返す\n' +
     '- 出力は必ず JSON、説明文は reasoning に分離\n' +
     '- periodStart / periodEnd は基準日を起点に解釈し YYYY-MM-DD 形式で返す\n' +
-    '- 日付が明示されていない場合は periodStart と periodEnd に基準日を設定する';
+    '- 日付が明示されていない場合は periodStart と periodEnd に基準日を設定する\n' +
+    '- 入力に複数の行がある場合、原則として「1 行 = 1 エントリ」とする\n' +
+    '- 行数分の entries を必ず返すこと（複数行を 1 件に要約してはならない）\n' +
+    '- 1 行に複数の作業が連結記述されている場合のみ、その行を複数 entries に分割する\n' +
+    '- 行が空白・記号のみで意味を持たない場合は entries に含めない\n\n' +
+    '例（以下の例文の日付は「基準日 (' + referenceDate + ') を起点に動的生成」されている）:\n' +
+    '例 1（複数行入力 → 複数エントリ。workTypeId は WorkTypes 一覧の id 値を選ぶ）:\n' +
+    '入力:\n' +
+    '  ' + monthDay_(d1) + ' LW23012 配線 3日\n' +
+    '  ' + monthDay_(d2) + ' K-12345 試運転 2日\n' +
+    '  ' + monthDay_(d4) + ' PJ001 設計修正 半日\n' +
+    '出力 entries（3 件）:\n' +
+    '  [\n' +
+    '    { "kobanCode":"LW23012", "duration":"3日",  "periodStart":"' + d1 + '", "periodEnd":"' + formatYmd_(shotBase, 3) + '", "detail":"配線",      "workTypeId":"<WorkTypes 一覧から選択>" },\n' +
+    '    { "kobanCode":"K-12345", "duration":"2日",  "periodStart":"' + d2 + '", "periodEnd":"' + formatYmd_(shotBase, 4) + '", "detail":"試運転",   "workTypeId":"<WorkTypes 一覧から選択>" },\n' +
+    '    { "kobanCode":"PJ001",   "duration":"半日", "periodStart":"' + d4 + '", "periodEnd":"' + d4 + '",                          "detail":"設計修正", "workTypeId":"<WorkTypes 一覧から選択>" }\n' +
+    '  ]\n\n' +
+    '例 2（1 行に複数作業 → 1 行から 2 entries に分割）:\n' +
+    '入力: 明日 LW23012 で配線と試運転を 1 日ずつ\n' +
+    '出力 entries: 配線エントリ（duration:"1日"）+ 試運転エントリ（duration:"1日"）の 2 件\n\n' +
+    '例 3（行数の維持）:\n' +
+    '入力が 3 行の場合、entries は必ず 3 件以上（行をマージしない）。\n' +
+    '入力が 5 行で 1 行が空白行の場合は entries は 4 件。';
+}
+
+/**
+ * "YYYY-MM-DD" → Date（ローカルタイムゾーンの 0:00）
+ * @param {string} ymd
+ * @returns {Date}
+ */
+function parseDateLocal_(ymd) {
+  var s = String(ymd || '').trim();
+  var m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return new Date();
+  return new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10));
+}
+
+/**
+ * Date + 日数オフセット → "YYYY-MM-DD"
+ * @param {Date} base
+ * @param {number} offsetDays
+ * @returns {string}
+ */
+function formatYmd_(base, offsetDays) {
+  var d = new Date(base.getTime());
+  d.setDate(d.getDate() + (offsetDays || 0));
+  var y  = d.getFullYear();
+  var mm = ('0' + (d.getMonth() + 1)).slice(-2);
+  var dd = ('0' + d.getDate()).slice(-2);
+  return y + '-' + mm + '-' + dd;
+}
+
+/**
+ * "YYYY-MM-DD" → "M/D"（例文用の短縮表記）
+ * @param {string} ymd
+ * @returns {string}
+ */
+function monthDay_(ymd) {
+  var p = String(ymd).split('-');
+  if (p.length !== 3) return ymd;
+  return parseInt(p[1], 10) + '/' + parseInt(p[2], 10);
 }
 
 /**
