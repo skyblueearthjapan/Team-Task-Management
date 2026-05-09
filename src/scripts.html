@@ -40,6 +40,20 @@
     return new Date(+p[0], +p[1] - 1, +p[2]);
   }
 
+  /**
+   * グローバル UUID 生成（GAS Utilities.getUuid と互換、ブラウザ単独で生成可能）。
+   * DailyReport の seq を不変な一意キーとして固定するために使用する。
+   * 一度 record に付与した値は以後変更しない（多重 flushNow / リロード後再保存で
+   * 同じ既存行を upsertDailyReport が見つけられるようにするため）。
+   */
+  function _genRecordId() {
+    if (window.crypto && window.crypto.randomUUID) {
+      return window.crypto.randomUUID();
+    }
+    // フォールバック: timestamp + 大乱数
+    return 'rec_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 11);
+  }
+
   /** 日本語曜日 */
   var DOW_JA = ['日', '月', '火', '水', '木', '金', '土'];
 
@@ -1181,7 +1195,7 @@
         staffId:          staffId,
         reportDate:       Store.today,
         section:          'today',
-        seq:              Date.now(),
+        seq:              _genRecordId(),
         kobanCode:        sch.kobanCode || '',
         workTypeId:       sch.workTypeId || '',
         detail:           detailText,         // ★ Backend スキーマ準拠
@@ -1433,7 +1447,8 @@
       // 「↑ 本日へコピー」ボタン（前日行）
       card.querySelectorAll('.btn-copy-to-today-row').forEach(function (btn) {
         btn.addEventListener('click', function () {
-          var seq = parseInt(btn.getAttribute('data-seq'), 10);
+          // FIX: seq は UUID 文字列のため parseInt せず文字列のまま渡す
+          var seq = btn.getAttribute('data-seq');
           ReportView._copyToToday(s.id, seq);
         });
       });
@@ -1506,7 +1521,7 @@
         staffId:     staffId,
         reportDate:  Store.today,
         section:     'prev',
-        seq:         Date.now(),
+        seq:         _genRecordId(),
         kobanCode:   orig.kobanCode   || '',
         workTypeId:  orig.workTypeId  || '',
         detail:      detailText,        // ★ Backend スキーマ準拠
@@ -1529,8 +1544,9 @@
     // 前日行を本日へコピー（元行は残す）
     _copyToToday: function (staffId, seq) {
       var reports = Store.reports[staffId] || [];
+      // FIX: seq は UUID 文字列のため文字列比較で照合する
       var src = reports.find(function (r) {
-        return Number(r.seq) === Number(seq) && (r.section === 'prev' || r.section === 'yesterday');
+        return String(r.seq) === String(seq) && (r.section === 'prev' || r.section === 'yesterday');
       });
       if (!src) return;
       // 同 staffId / today / 同じ koban + detail で重複チェック
@@ -1540,14 +1556,12 @@
           && (r.detail || '') === (src.detail || '');
       });
       if (dup) return;
-      var todaySeqs = reports.filter(function (r) { return r.section === 'today'; }).map(function (r) { return Number(r.seq) || 0; });
-      var newSeq = Math.max(0, ...todaySeqs) + 1;
       var newRow = {
         id:          'dr_' + (window.crypto && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '').substring(0, 16) : Math.random().toString(36).substring(2, 18)),
         staffId:     staffId,
         reportDate:  Store.today,
         section:     'today',
-        seq:         newSeq,
+        seq:         _genRecordId(),
         kobanCode:   src.kobanCode  || '',
         workTypeId:  src.workTypeId || '',
         detail:      src.detail     || '',
@@ -1734,7 +1748,7 @@
           staffId:     s.id,
           reportDate:  Store.today,
           section:     section,
-          seq:         Date.now(),
+          seq:         _genRecordId(),
           kobanCode:   koban,
           detail:      wtName,             // ★ Backend スキーマ準拠
           duration:    durVal,
@@ -1815,15 +1829,17 @@
       GanttView.renderBars();
 
       // 元の日報レコードに linkedScheduleId を書き戻す（カスケード削除のため）
+      // FIX-2: ここでは flushNow を呼ばない。
+      //   呼び出し側（doSave / _addEntriesToReport / addToReport 等）が直後に
+      //   SaveQueue.flushNow(record) を実行するため、record オブジェクトを共有する
+      //   srcInStore も同じ参照（Object.assign 等されない限り）で linkedScheduleId が
+      //   保存に乗る。多重 flushNow による append 重複を防ぐ。
       record.linkedScheduleId = newId;
       var srcInStore = (Store.reports[staffId] || []).find(function (r) {
         return r === record || (r.id && record.id && r.id === record.id);
       });
       if (srcInStore) {
         srcInStore.linkedScheduleId = newId;
-        SaveQueue.flushNow(srcInStore);
-      } else {
-        SaveQueue.flushNow(record);
       }
 
       google.script.run
@@ -1832,12 +1848,18 @@
             var ex = Store.schedules.find(function (s) { return s.id === newId; });
             if (ex) ex.id = serverId;
 
-            if (srcInStore && srcInStore.linkedScheduleId === newId) {
-              srcInStore.linkedScheduleId = serverId;
-              SaveQueue.flushNow(srcInStore);
-            } else if (record.linkedScheduleId === newId) {
-              record.linkedScheduleId = serverId;
-              SaveQueue.flushNow(record);
+            // FIX-2: serverId が変わった場合のみ linkedScheduleId を再保存する。
+            //   record / srcInStore の linkedScheduleId を更新し、upsertDailyReport を
+            //   1 回だけ直接呼んで列を更新する（SaveQueue は経由しない）。
+            var target = (srcInStore && srcInStore.linkedScheduleId === newId)
+              ? srcInStore
+              : ((record.linkedScheduleId === newId) ? record : null);
+            if (target) {
+              target.linkedScheduleId = serverId;
+              google.script.run
+                .withSuccessHandler(function () {})
+                .withFailureHandler(function () {})
+                .upsertDailyReport(target);
             }
           }
           GanttView.renderBars();
@@ -1845,12 +1867,16 @@
         .withFailureHandler(function (err) {
           toast('ガント自動追加失敗: ' + String(err.message || err), 'warn');
           Store.schedules = Store.schedules.filter(function (s) { return s.id !== newId; });
-          if (srcInStore && srcInStore.linkedScheduleId === newId) {
-            srcInStore.linkedScheduleId = '';
-            SaveQueue.flushNow(srcInStore);
-          } else if (record.linkedScheduleId === newId) {
-            record.linkedScheduleId = '';
-            SaveQueue.flushNow(record);
+          // FIX-2: 失敗時は linkedScheduleId をロールバックし、1 回だけ upsert で反映する。
+          var target = (srcInStore && srcInStore.linkedScheduleId === newId)
+            ? srcInStore
+            : ((record.linkedScheduleId === newId) ? record : null);
+          if (target) {
+            target.linkedScheduleId = '';
+            google.script.run
+              .withSuccessHandler(function () {})
+              .withFailureHandler(function () {})
+              .upsertDailyReport(target);
           }
           GanttView.renderBars();
         })
@@ -2361,7 +2387,7 @@
           staffId:      s.id,
           reportDate:   Store.today,
           section:      section,
-          seq:          Date.now() + Math.floor(Math.random() * 1000),
+          seq:          _genRecordId(),
           kobanCode:    e.kobanCode    || '',
           workTypeId:   e.workTypeId   || '',
           detail:       e.detail || e.workTypeName || '',
@@ -2589,7 +2615,7 @@
           staffId:      staffId,
           reportDate:   Store.today,
           section:      'today',
-          seq:          Date.now() + Math.floor(Math.random() * 1000),
+          seq:          _genRecordId(),
           kobanCode:    e.kobanCode    || '',
           workTypeId:   e.workTypeId   || '',
           detail:       e.detail || e.workTypeName || '',

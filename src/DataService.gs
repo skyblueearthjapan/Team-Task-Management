@@ -354,16 +354,47 @@ function getSchedules(startDate, endDate) {
  * 新規 Schedule レコードを追加する。
  * id は内部で自動生成し、createdAt / updatedAt は appendRow_ が自動セットする。
  *
+ * FIX-5: LockService と冪等チェックを追加。
+ *   _maybeAutoAddGantt が多重発火（多重 flushNow → 多重 createSchedule）した場合、
+ *   同じ staffId + kobanCode + 重なる日付範囲のスケジュールが既にあれば、
+ *   新規追加せず既存 id を返して append 重複を防ぐ。
+ *
  * @param {Object} record - staffId, startDate, endDate, kobanCode, workTypeId, note, lane
- * @returns {string} 生成された id（'sch_xxxxxxxxxxxxxxxx' 形式）
+ * @returns {string} 生成された id、または既存重複の id
  */
 function createSchedule(record) {
-  // クライアント側で UUID を事前生成している場合はそれを尊重する。
-  // 楽観的 UI と整合させ、successHandler 待ちの id 不整合を防ぐ。
-  if (!record.id) {
-    record.id = generateId_('sch');
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    // 既存重複の検出: 同 staffId + 同 kobanCode + 重なる日付範囲
+    const startYmd = toYMD_(record.startDate);
+    const endYmd   = toYMD_(record.endDate);
+    if (startYmd && endYmd && record.staffId) {
+      const koban = String(record.kobanCode || '');
+      const dup = listAll(SHEET_NAMES.SCHEDULES).find(function (r) {
+        if (String(r.staffId) !== String(record.staffId)) return false;
+        if (String(r.kobanCode || '') !== koban) return false;
+        const rs = toYMD_(r.startDate);
+        const re = toYMD_(r.endDate);
+        if (!rs || !re) return false;
+        // 期間が重なる
+        return rs <= endYmd && re >= startYmd;
+      });
+      if (dup) {
+        Logger.log('[createSchedule] duplicate detected, returning existing id: ' + dup.id);
+        return dup.id;
+      }
+    }
+
+    // クライアント側で UUID を事前生成している場合はそれを尊重する。
+    // 楽観的 UI と整合させ、successHandler 待ちの id 不整合を防ぐ。
+    if (!record.id) {
+      record.id = generateId_('sch');
+    }
+    return appendRow_(SHEET_NAMES.SCHEDULES, record);
+  } finally {
+    lock.releaseLock();
   }
-  return appendRow_(SHEET_NAMES.SCHEDULES, record);
 }
 
 /**
@@ -408,25 +439,44 @@ function getDailyReports(staffId, reportDate) {
  * DailyReport を追加または更新する（staffId + reportDate + section + seq で一意識別）。
  * 既存行があれば更新、なければ追加。
  *
+ * FIX-3: LockService で並行呼び出しを直列化する。
+ *   多重 flushNow / リロード直後の連続保存で同時に existing 検索が走ると
+ *   両方が undefined を返して二重 append → ガント／日報行の重複を生む。
+ *   getScriptLock().waitLock(15000) で 15 秒待機し、必ず逐次実行する。
+ *
+ * 防御策: record.seq が空なら server 側で UUID を生成する（client が UUID を
+ *   渡す前提だが、旧コードからの呼び出しに備える）。
+ *
  * @param {Object} record - staffId, reportDate, section, seq, ... を含む Object
  * @returns {string|boolean} 新規追加: 生成 id / 更新: true
  */
 function upsertDailyReport(record) {
-  // seq は数値・文字列どちらで渡されても一致するよう文字列比較する
-  const seqStr = String(record.seq);
-  const existing = getDailyReports(record.staffId, record.reportDate)
-    .find(r => String(r.seq) === seqStr && r.section === record.section);
-  if (existing) {
-    // 検索キー（staffId/reportDate/section/seq）も updates に含まれるが値不変のため問題なし
-    // id だけは既存行の id を保護するため除外
-    const updates = {};
-    Object.keys(record).forEach(function(k) {
-      if (k !== 'id') updates[k] = record[k];
-    });
-    return updateRow_(SHEET_NAMES.DAILY_REPORTS, existing.id, updates);
-  } else {
-    record.id = generateId_('dr');
-    return appendRow_(SHEET_NAMES.DAILY_REPORTS, record);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    // seq は数値・文字列どちらで渡されても一致するよう文字列比較する
+    let seqStr = String(record.seq || '');
+    if (!seqStr) {
+      // 防御的フォールバック: client が UUID を渡さなかった場合のみ生成
+      seqStr = 'rec_' + Date.now() + '_' + Math.floor(Math.random() * 1e9);
+      record.seq = seqStr;
+    }
+    const existing = getDailyReports(record.staffId, record.reportDate)
+      .find(r => String(r.seq) === seqStr && r.section === record.section);
+    if (existing) {
+      // 検索キー（staffId/reportDate/section/seq）も updates に含まれるが値不変のため問題なし
+      // id だけは既存行の id を保護するため除外
+      const updates = {};
+      Object.keys(record).forEach(function(k) {
+        if (k !== 'id') updates[k] = record[k];
+      });
+      return updateRow_(SHEET_NAMES.DAILY_REPORTS, existing.id, updates);
+    } else {
+      record.id = generateId_('dr');
+      return appendRow_(SHEET_NAMES.DAILY_REPORTS, record);
+    }
+  } finally {
+    lock.releaseLock();
   }
 }
 

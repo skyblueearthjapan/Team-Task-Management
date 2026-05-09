@@ -387,6 +387,90 @@ function applyDateColumnFormat_(sheet, sheetName) {
   });
 }
 
+// ─── DailyReports 重複行クリーンアップ（手動実行用） ────────────
+
+/**
+ * DailyReports の重複行を検出し、最新（updatedAt 降順）1 行だけ残して削除する。
+ *
+ * 重複キー: staffId + reportDate + section + detail（同一作業内容と判断）
+ *
+ * 既存運用で seq が Date.now() ベースだった頃に発生した二重 append を
+ * 後追いで掃除する手動実行ユーティリティ。GAS エディタから直接呼び出す。
+ *
+ * 削除前に Logger.log で件数を出力し、戻り値で詳細を返す。
+ * LockService で他の保存と直列化する。
+ *
+ * @returns {{deleted:number, groups:number, message:string}|{error:string}}
+ */
+function dedupeDailyReports() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(SHEET_NAMES.DAILY_REPORTS);
+    if (!sheet) return { error: 'DailyReports sheet not found' };
+
+    // listAll は _rowIndex を返さないため、ここでは getDataRange から自前構築する。
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) {
+      const empty = '重複検出: 0グループ / 削除行数: 0（データなし）';
+      Logger.log(empty);
+      return { deleted: 0, groups: 0, message: empty };
+    }
+
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+    const rows = data.slice(1).map(function (rawRow, i) {
+      const obj = rowToObject_(headers, rawRow);
+      obj._rowIndex = i + 2; // 1-indexed、ヘッダ +1
+      return obj;
+    });
+
+    // staffId + reportDate + section + detail でグルーピング
+    const groups = {};
+    rows.forEach(function (r) {
+      const key = [
+        String(r.staffId || ''),
+        toYMD_(r.reportDate),
+        String(r.section || ''),
+        String(r.detail || '').trim()
+      ].join('|');
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(r);
+    });
+
+    const toDelete = []; // _rowIndex の配列
+    let groupCount = 0;
+    Object.keys(groups).forEach(function (key) {
+      const grp = groups[key];
+      if (grp.length <= 1) return;
+      // updatedAt 降順 → 最新を残す（updatedAt が空なら createdAt にフォールバック）
+      grp.sort(function (a, b) {
+        const ua = String(a.updatedAt || a.createdAt || '');
+        const ub = String(b.updatedAt || b.createdAt || '');
+        return ub.localeCompare(ua);
+      });
+      // 残す: grp[0]、削除: grp[1..]
+      for (let i = 1; i < grp.length; i++) {
+        toDelete.push(grp[i]._rowIndex);
+      }
+      groupCount++;
+    });
+
+    // 大きい行から削除（インデックスズレ防止）
+    toDelete.sort(function (a, b) { return b - a; });
+    toDelete.forEach(function (rowIdx) {
+      sheet.deleteRow(rowIdx);
+    });
+
+    const msg = '重複検出: ' + groupCount + 'グループ / 削除行数: ' + toDelete.length;
+    Logger.log(msg);
+    return { deleted: toDelete.length, groups: groupCount, message: msg };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 /**
  * 既存の Schedules / DailyReports / MailQueue シートで、
  * Date 型として保存されている日付セルを YYYY-MM-DD のテキストに変換し、
