@@ -179,7 +179,8 @@ function buildMailBody(params) {
   lines.push('');
 
   // ▼ 本日の作業内容
-  lines.push('▼ 本日の作業内容');
+  var SECTION_DASH = '　―――――――――――――――――――――――――';  // 全角スペース1 + ― 27個
+  lines.push('▼ 本日の作業内容' + SECTION_DASH);
   // detail が空のアイテムはスキップ
   var validTodayItems = todayItems.filter(function(item) { return item.detail && String(item.detail).trim() !== ''; });
   if (validTodayItems.length > 0) {
@@ -205,7 +206,7 @@ function buildMailBody(params) {
   }
 
   // ▼ 前日までの作業報告
-  lines.push('▼ 前日までの作業報告');
+  lines.push('▼ 前日までの作業報告' + SECTION_DASH);
   // detail が空のアイテムはスキップ
   var validPrevItems = prevItems.filter(function(item) { return item.detail && String(item.detail).trim() !== ''; });
   if (validPrevItems.length > 0) {
@@ -235,7 +236,7 @@ function buildMailBody(params) {
   lines.push('-----------------------------------------------------------');
   lines.push('               ' + sigCompany);
   lines.push('　　　　　　　　　' + sigName);
-  lines.push('Mail:' + sigEmail);
+  lines.push('　　　　Mail:' + sigEmail);
   lines.push('-----------------------------------------------------------');
 
   return lines.join('\n');
