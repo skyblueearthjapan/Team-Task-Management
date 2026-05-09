@@ -536,6 +536,33 @@ function getLatestMailRequestFor(staffId, reportDate) {
 }
 
 /**
+ * 指定日の各スタッフの最新メールリクエストを一括取得する。
+ * フロントエンドのリロード時の負荷削減用（7 名分を 7 回呼ぶ代わりに 1 回で完結）。
+ * listAll(MAIL_QUEUE) を 1 回だけ呼び出し、reportDate でフィルタしてから
+ * staffId ごとに createdAt 降順で最新 1 件を選択する。
+ *
+ * @param {string} reportDate - YYYY-MM-DD
+ * @returns {Object} { staffId: latestRequest|null } の形式
+ */
+function getLatestMailRequestsForDate(reportDate) {
+  var ymd = String(reportDate || '').slice(0, 10);
+  if (!ymd) return {};
+  var allRequests = listAll(SHEET_NAMES.MAIL_QUEUE);
+  var byStaff = {};
+  allRequests.forEach(function (r) {
+    var rYmd = String(r.reportDate || '').slice(0, 10);
+    if (rYmd !== ymd) return;
+    var sid = r.targetStaffId || '';
+    if (!sid) return;
+    var cur = byStaff[sid];
+    if (!cur || String(r.createdAt || '') > String(cur.createdAt || '')) {
+      byStaff[sid] = r;
+    }
+  });
+  return byStaff;
+}
+
+/**
  * MailQueue の状態別カウントを返す（ダッシュボード KPI 用）。
  * 大量データ環境を想定し、status と createdAt のみで集計する。
  *

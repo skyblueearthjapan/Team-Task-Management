@@ -201,6 +201,8 @@ function aiSuggestForReport(hint, context) {
   // 工番マスタ補完（suggestion.kobanCode が取れた場合のみ）
   if (result.suggestion && result.suggestion.kobanCode) {
     var kobanDetail = lookupKobanDetail_(result.suggestion.kobanCode);
+    // kobanCode も正規化済みで上書き（大小文字・全角半角を統一）
+    result.suggestion.kobanCode   = kobanDetail.kobanCode   || normalizeKobanCode_(result.suggestion.kobanCode) || null;
     result.suggestion.customer    = kobanDetail.customer    || null;
     result.suggestion.productName = kobanDetail.productName || null;
   }
@@ -383,12 +385,15 @@ function enrichWithKobanMaster_(entries) {
     // エントリの全フィールドをコピー
     Object.keys(entry).forEach(function(k) { enriched[k] = entry[k]; });
 
-    // kobanCode を正規化・検証
-    var kobanCode = entry.kobanCode ? String(entry.kobanCode).trim() : null;
-    if (kobanCode && !isValidKobanCode_(kobanCode)) {
+    // kobanCode を正規化・検証（大小文字・全角半角を統一してから検証）
+    var rawKobanCode = entry.kobanCode || null;
+    var kobanCode    = null;
+    if (rawKobanCode && isValidKobanCode_(rawKobanCode)) {
+      // 検証通過: 正規化済みコードを採用
+      kobanCode = normalizeKobanCode_(rawKobanCode);
+    } else if (rawKobanCode) {
       // ハルシネーション検出: 工番コード形式に合わない場合は null に正規化
-      Logger.log('[AIService.enrichWithKobanMaster_] Invalid kobanCode normalized to null: ' + kobanCode);
-      kobanCode = null;
+      Logger.log('[AIService.enrichWithKobanMaster_] Invalid kobanCode normalized to null: ' + rawKobanCode);
     }
     enriched.kobanCode = kobanCode;
 
@@ -398,6 +403,7 @@ function enrichWithKobanMaster_(entries) {
 
     if (kobanCode) {
       var detail = lookupKobanDetail_(kobanCode);
+      // lookupKobanDetail_ の戻り値にも正規化済み kobanCode が含まれるが、ここでは既に正規化済み
       enriched.customer    = detail.customer    || null;
       enriched.productName = detail.productName || null;
     }
@@ -408,21 +414,26 @@ function enrichWithKobanMaster_(entries) {
 
 /**
  * 工番コードで工番マスタを検索し、受注先・品名を返す。
+ * 大小文字・全角半角を正規化してから照合するため、
+ * AI が lw23012 / ＬＷ２３０１２ 等を返した場合も LW23012 として照合できる。
  * 見つからない場合は空オブジェクトを返す（UI 側で「マスタ外」表示）。
  *
- * @param {string} kobanCode - 工番コード
- * @returns {{ customer: string, productName: string }}
+ * @param {string} rawCode - 工番コード（AI 返値、未正規化可）
+ * @returns {{ kobanCode: string, customer: string, productName: string }}
  */
-function lookupKobanDetail_(kobanCode) {
-  if (!kobanCode) return {};
+function lookupKobanDetail_(rawCode) {
+  if (!rawCode) return {};
+  var code = normalizeKobanCode_(rawCode);
+  if (!code) return {};
 
   try {
     var master = getKobanMaster();
     var found  = master.find(function(row) {
-      return String(row['工番'] || '').trim() === String(kobanCode).trim();
+      return normalizeKobanCode_(row['工番']) === code;
     });
     if (!found) return {};
     return {
+      kobanCode:   code,
       customer:    String(found['受注先'] || '').trim() || null,
       productName: String(found['品名']   || '').trim() || null
     };
@@ -433,25 +444,48 @@ function lookupKobanDetail_(kobanCode) {
 }
 
 /**
+ * 工番コードを正規化する。
+ * - 全角英数字 → 半角
+ * - 大文字に統一
+ * - 前後の空白除去
+ * - 各種ダッシュ → ASCIIハイフン
+ *
+ * @param {string} s - 正規化対象の文字列
+ * @returns {string}  正規化済み文字列（null/undefinedは空文字列を返す）
+ */
+function normalizeKobanCode_(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/[Ａ-Ｚａ-ｚ０-９]/g, function(c) {
+      return String.fromCharCode(c.charCodeAt(0) - 0xFEE0);
+    })
+    .replace(/[ー－―]/g, '-')
+    .toUpperCase()
+    .trim();
+}
+
+/**
  * 工番コードの形式を検証する（ハルシネーション検出）。
  * 英字1〜3文字 + 数字4〜6桁、またはハイフン区切り等の一般的なパターンを許容する。
+ * 内部で normalizeKobanCode_ を適用してから検証する。
  *
- * 許容例: LW23012, K-12345, ABC001, lw-2026-001
+ * 許容例: LW23012, K-12345, ABC001, lw-2026-001, ＬＷ２３０１２
  * 拒否例: 作業, 明日, 構想図, 12（数字のみ短すぎ）
  *
  * @param {string} code
  * @returns {boolean}
  */
 function isValidKobanCode_(code) {
-  if (!code || typeof code !== 'string') return false;
-  var s = code.trim();
-  if (s.length < 3 || s.length > 20) return false;
+  if (!code) return false;
+  var n = normalizeKobanCode_(code);
+  if (!n) return false;
+  if (n.length < 3 || n.length > 20) return false;
+  // 正規化後は ASCII 大文字 + 数字 + ハイフンのみ許容
+  // 日本語文字（漢字等）が混入している場合は拒否（ハルシネーション対策）
+  if (!/^[A-Z0-9-]+$/.test(n)) return false;
   // 英字を含み、かつ数字を含む（工番コードの最低条件）
-  // 完全に数字のみ、または完全に日本語のみは拒否
-  var hasAlpha  = /[A-Za-z]/.test(s);
-  var hasDigit  = /[0-9]/.test(s);
-  var hasKanji  = /[一-鿿]/.test(s);
-  if (hasKanji) return false;
+  var hasAlpha = /[A-Z]/.test(n);
+  var hasDigit = /[0-9]/.test(n);
   return hasAlpha && hasDigit;
 }
 

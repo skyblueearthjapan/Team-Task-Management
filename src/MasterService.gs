@@ -227,21 +227,26 @@ function getMasterPayload() {
 /**
  * 外部マスタのスプレッドシートを openById で開いて返す。
  * ID は以下の優先順で取得する:
- *   1. Settings シートの KOBAN_MASTER_SHEET_ID
- *   2. Script Properties の KOBAN_MASTER_SHEET_ID
+ *   1. Script Properties の KOBAN_MASTER_SHEET_ID（高速経路: スプレッドシート読み取り不要）
+ *   2. Settings シートの KOBAN_MASTER_SHEET_ID（フォールバック: 管理者が Settings で運用変更している場合）
  *
  * @returns {GoogleAppsScript.Spreadsheet.Spreadsheet}
  * @throws {Error} ID が未設定、またはブックを開けない場合
  */
 function openMasterSpreadsheet_() {
-  var sheetId = getSetting(SCRIPT_PROP_KEYS.KOBAN_MASTER_SHEET_ID);
+  // 高速経路: Script Properties から直接取得（Settings シート読み取りコストを回避）
+  var sheetId = PropertiesService.getScriptProperties()
+    .getProperty(SCRIPT_PROP_KEYS.KOBAN_MASTER_SHEET_ID);
+
+  // フォールバック: Settings シート（管理者がそこで運用変更している場合）
   if (!sheetId) {
-    sheetId = PropertiesService.getScriptProperties().getProperty(SCRIPT_PROP_KEYS.KOBAN_MASTER_SHEET_ID);
+    sheetId = getSetting(SCRIPT_PROP_KEYS.KOBAN_MASTER_SHEET_ID);
   }
+
   if (!sheetId) {
     throw new Error(
       'MasterService.openMasterSpreadsheet_: ' +
-      'KOBAN_MASTER_SHEET_ID が Settings シートおよび Script Properties に設定されていません。'
+      'KOBAN_MASTER_SHEET_ID が Script Properties および Settings シートに設定されていません。'
     );
   }
 
