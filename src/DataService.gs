@@ -504,11 +504,21 @@ function setSetting(key, value) {
  *
  * @param {string}        staffId    - Staff.id
  * @param {string}        reportDate - YYYY-MM-DD
+ * @param {string}        section    - 'today' | 'prev'
  * @param {number|string} seq        - 行番号（数値 or 文字列）
- * @param {string}        [section]  - 'today' | 'prev'（省略可）
  * @returns {boolean} 削除成功: true、該当なし: false
+ *
+ * Defensive: フロントが旧順 (..., seq, section) で呼んできた場合に備え、
+ * 3 番目の引数が seq っぽく数値化できる場合は引数を入れ替える。
  */
-function deleteDailyReportBySeq(staffId, reportDate, seq, section) {
+function deleteDailyReportBySeq(staffId, reportDate, section, seq) {
+  // 後方互換: 3番目が数値・4番目が 'today'/'prev' の場合は旧順扱い
+  if (seq === 'today' || seq === 'prev' ||
+      (!isNaN(parseFloat(section)) && (seq === undefined || seq === null || seq === ''))) {
+    var tmp = section;
+    section = seq;
+    seq = tmp;
+  }
   var seqStr = String(seq);
   var rows = getDailyReports(staffId, reportDate);
   var target = rows.find(function(r) {
