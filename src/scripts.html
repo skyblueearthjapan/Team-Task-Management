@@ -3,6 +3,11 @@
   'use strict';
 
   // ════════════════════════════════════════════════════════════════
+  // DIAGNOSTIC: URL に ?debug=1 を付けたときだけ有効
+  // ════════════════════════════════════════════════════════════════
+  var DEBUG_RELOAD = /[?&]debug=1\b/.test(location.search);
+
+  // ════════════════════════════════════════════════════════════════
   // A. ユーティリティ
   // ════════════════════════════════════════════════════════════════
 
@@ -160,6 +165,15 @@
   document.addEventListener('DOMContentLoaded', function () {
     initControls();
     Heartbeat.init();
+    // DIAGNOSTIC: デバッグバナーを画面上部に表示
+    if (DEBUG_RELOAD) {
+      var banner = document.createElement('div');
+      banner.id = 'debug-banner';
+      banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#fbf8f1;border-bottom:1px solid var(--line-2);padding:6px 12px;font-size:11px;color:var(--txt-2);z-index:9999;font-family:monospace';
+      banner.textContent = '🔍 DEBUG MODE — DevTools Console を開いて [loadAll diagnostic] を確認してください';
+      document.body.appendChild(banner);
+      document.body.style.paddingTop = '28px';
+    }
     loadAll();
   });
 
@@ -207,6 +221,21 @@
       var workTypes = results[2] || [];
       var schedules = results[3] || [];
       var prevDate  = results[4] || offsetDate(today, -1);
+
+      // DIAGNOSTIC: Phase 1 結果サマリ
+      if (DEBUG_RELOAD) {
+        console.group('[loadAll diagnostic]');
+        console.log('master:', master ? {
+          kobanList:   (master.kobanList  || []).length,
+          calendar:    (master.calendar   || []).length,
+          calendarMap: Object.keys(master.calendarMap || {}).length
+        } : 'NULL');
+        console.log('staff:',     staff && staff.length, staff);
+        console.log('workTypes:', workTypes && workTypes.length, workTypes);
+        console.log('schedules:', schedules && schedules.length, schedules);
+        console.log('today:', today);
+        console.groupEnd();
+      }
 
       Store.kobanList       = master.kobanList   || [];
       Store.calendarMap     = master.calendarMap || {};
@@ -280,7 +309,29 @@
           var mmap = {};
           staff.filter(isUiStaff).forEach(function (s) { mmap[s.id] = mailMap[s.id] || null; });
           Store.mailLatest = mmap;
+
+          // DIAGNOSTIC: Phase 2 結果サマリ
+          if (DEBUG_RELOAD) {
+            console.group('[loadAll Phase 2]');
+            console.log('reports:',     phase2.rmap && Object.keys(phase2.rmap).length, phase2.rmap);
+            console.log('mailMap:',     Object.keys(mailMap || {}).length, mailMap);
+            console.log('Store.reports:', Store.reports);
+            console.groupEnd();
+          }
+
+          if (DEBUG_RELOAD) console.log('[render] before ReportView, Store.reports:', JSON.parse(JSON.stringify(Store.reports)));
           ReportView.render();
+          if (DEBUG_RELOAD) console.log('[render] after ReportView');
+
+          // DIAGNOSTIC: window.__diag にエクスポート
+          if (DEBUG_RELOAD) {
+            window.__diag = {
+              Store: Store,
+              lastLoad: { master: master, staff: staff, workTypes: workTypes, schedules: schedules, reports: phase2.rmap, mailMap: mailMap },
+              today: today
+            };
+          }
+
           lsSave('reports_' + today, Store.reports);
           // マスタまたは日報が失敗 & 未リトライの場合は 5 秒後に再試行
           if ((masterFailed || phase2.reportsFailed) && !isRetry) {
