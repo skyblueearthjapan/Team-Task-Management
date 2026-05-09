@@ -511,6 +511,25 @@ function setSetting(key, value) {
  * Defensive: フロントが旧順 (..., seq, section) で呼んできた場合に備え、
  * 3 番目の引数が seq っぽく数値化できる場合は引数を入れ替える。
  */
+/**
+ * scheduleId（ガント側 id）に linkedScheduleId で紐付いている DailyReport を全件削除する。
+ * ガント削除時の連動削除に使う。
+ *
+ * @param {string} scheduleId
+ * @returns {number} 削除した行数
+ */
+function deleteDailyReportsByScheduleId(scheduleId) {
+  if (!scheduleId) return 0;
+  var rows = listAll(SHEET_NAMES.DAILY_REPORTS).filter(function (r) {
+    return String(r.linkedScheduleId || '') === String(scheduleId);
+  });
+  var deleted = 0;
+  rows.forEach(function (r) {
+    if (deleteRow(SHEET_NAMES.DAILY_REPORTS, r.id)) deleted++;
+  });
+  return deleted;
+}
+
 function deleteDailyReportBySeq(staffId, reportDate, section, seq) {
   // 後方互換: 3番目が数値・4番目が 'today'/'prev' の場合は旧順扱い
   if (seq === 'today' || seq === 'prev' ||

@@ -922,16 +922,38 @@
     del: function () {
       var id = document.getElementById('ge-id').value;
       if (!id) return;
-      if (!confirm('このスケジュールを削除しますか？')) return;
+      if (!confirm('このスケジュールを削除しますか？関連する業務報告行も同時に削除されます。')) return;
 
-      Store.schedules = Store.schedules.filter(function (s) { return s.id !== id; });
+      // ローカル: スケジュール除外
+      Store.schedules = (Store.schedules || []).filter(function (s) { return s.id !== id; });
+      // ローカル: 関連日報除外（全スタッフ横断）
+      Object.keys(Store.reports || {}).forEach(function (sid) {
+        Store.reports[sid] = (Store.reports[sid] || []).filter(function (r) {
+          return String(r.linkedScheduleId || '') !== String(id);
+        });
+      });
       GanttView.renderBars();
-      this.close();
+      ReportView.render();
+      GanttEditModal.close();
 
+      // サーバ: ガント削除
       google.script.run
-        .withSuccessHandler(function () { toast('削除しました'); })
         .withFailureHandler(function (err) { toast('削除失敗: ' + String(err.message || err), 'err'); })
         .deleteSchedule(id);
+
+      // サーバ: 関連日報削除（連動）
+      google.script.run
+        .withSuccessHandler(function (deletedCount) {
+          if (deletedCount > 0) {
+            toast('削除しました（関連日報 ' + deletedCount + ' 件も削除）');
+          } else {
+            toast('削除しました');
+          }
+        })
+        .withFailureHandler(function (err) {
+          toast('日報連動削除失敗: ' + String(err.message || err), 'err');
+        })
+        .deleteDailyReportsByScheduleId(id);
     },
 
     _updateKobanInfo: function (code) {
@@ -1624,17 +1646,44 @@
       Store.schedules.push(schRecord);
       GanttView.renderBars();
 
+      // 元の日報レコードに linkedScheduleId を書き戻す（カスケード削除のため）
+      record.linkedScheduleId = newId;
+      var srcInStore = (Store.reports[staffId] || []).find(function (r) {
+        return r === record || (r.id && record.id && r.id === record.id);
+      });
+      if (srcInStore) {
+        srcInStore.linkedScheduleId = newId;
+        SaveQueue.flushNow(srcInStore);
+      } else {
+        SaveQueue.flushNow(record);
+      }
+
       google.script.run
         .withSuccessHandler(function (serverId) {
           if (serverId && serverId !== newId) {
             var ex = Store.schedules.find(function (s) { return s.id === newId; });
             if (ex) ex.id = serverId;
+
+            if (srcInStore && srcInStore.linkedScheduleId === newId) {
+              srcInStore.linkedScheduleId = serverId;
+              SaveQueue.flushNow(srcInStore);
+            } else if (record.linkedScheduleId === newId) {
+              record.linkedScheduleId = serverId;
+              SaveQueue.flushNow(record);
+            }
           }
           GanttView.renderBars();
         })
         .withFailureHandler(function (err) {
           toast('ガント自動追加失敗: ' + String(err.message || err), 'warn');
           Store.schedules = Store.schedules.filter(function (s) { return s.id !== newId; });
+          if (srcInStore && srcInStore.linkedScheduleId === newId) {
+            srcInStore.linkedScheduleId = '';
+            SaveQueue.flushNow(srcInStore);
+          } else if (record.linkedScheduleId === newId) {
+            record.linkedScheduleId = '';
+            SaveQueue.flushNow(record);
+          }
           GanttView.renderBars();
         })
         .createSchedule(schRecord);
