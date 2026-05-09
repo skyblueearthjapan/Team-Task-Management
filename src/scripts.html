@@ -1860,6 +1860,10 @@
                 .withSuccessHandler(function () {})
                 .withFailureHandler(function () {})
                 .upsertDailyReport(target);
+            } else {
+              // 競合によりレコードの linkedScheduleId が newId 以外に上書きされている。
+              // 後続の編集で再 upsert される自然な経路に任せ、ここで強制上書きはしない。
+              console.warn('[autoAddGantt] linkedScheduleId reconciliation skipped — record overwritten between async calls. newId=' + newId + ' serverId=' + serverId);
             }
           }
           GanttView.renderBars();
@@ -1877,6 +1881,8 @@
               .withSuccessHandler(function () {})
               .withFailureHandler(function () {})
               .upsertDailyReport(target);
+          } else {
+            console.warn('[autoAddGantt] rollback skipped — record overwritten between async calls. newId=' + newId);
           }
           GanttView.renderBars();
         })

@@ -366,29 +366,19 @@ function createSchedule(record) {
   const lock = LockService.getScriptLock();
   lock.waitLock(15000);
   try {
-    // 既存重複の検出: 同 staffId + 同 kobanCode + 重なる日付範囲
-    const startYmd = toYMD_(record.startDate);
-    const endYmd   = toYMD_(record.endDate);
-    if (startYmd && endYmd && record.staffId) {
-      const koban = String(record.kobanCode || '');
+    // 多重送信の検出は client が事前生成した id の一致でのみ行う。
+    // 期間重複ベースのチェックは「同工番で異なる期間のスケジュールを連続登録」という
+    // 正当な業務操作までブロックしてしまうため採用しない。LockService とクライアント側
+    // の flushNow 一本化（FIX-2）で並行多重 append は既に直列化済み。
+    if (record.id) {
       const dup = listAll(SHEET_NAMES.SCHEDULES).find(function (r) {
-        if (String(r.staffId) !== String(record.staffId)) return false;
-        if (String(r.kobanCode || '') !== koban) return false;
-        const rs = toYMD_(r.startDate);
-        const re = toYMD_(r.endDate);
-        if (!rs || !re) return false;
-        // 期間が重なる
-        return rs <= endYmd && re >= startYmd;
+        return String(r.id) === String(record.id);
       });
       if (dup) {
-        Logger.log('[createSchedule] duplicate detected, returning existing id: ' + dup.id);
+        Logger.log('[createSchedule] same id already exists, returning: ' + dup.id);
         return dup.id;
       }
-    }
-
-    // クライアント側で UUID を事前生成している場合はそれを尊重する。
-    // 楽観的 UI と整合させ、successHandler 待ちの id 不整合を防ぐ。
-    if (!record.id) {
+    } else {
       record.id = generateId_('sch');
     }
     return appendRow_(SHEET_NAMES.SCHEDULES, record);
@@ -457,8 +447,9 @@ function upsertDailyReport(record) {
     // seq は数値・文字列どちらで渡されても一致するよう文字列比較する
     let seqStr = String(record.seq || '');
     if (!seqStr) {
-      // 防御的フォールバック: client が UUID を渡さなかった場合のみ生成
-      seqStr = 'rec_' + Date.now() + '_' + Math.floor(Math.random() * 1e9);
+      // 防御的フォールバック: client が UUID を渡さなかった場合のみ生成。
+      // GAS の Utilities.getUuid() で client 側 _genRecordId() と同じ UUID v4 形式に揃える。
+      seqStr = Utilities.getUuid();
       record.seq = seqStr;
     }
     const existing = getDailyReports(record.staffId, record.reportDate)

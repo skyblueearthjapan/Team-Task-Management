@@ -392,7 +392,7 @@ function applyDateColumnFormat_(sheet, sheetName) {
 /**
  * DailyReports の重複行を検出し、最新（updatedAt 降順）1 行だけ残して削除する。
  *
- * 重複キー: staffId + reportDate + section + detail（同一作業内容と判断）
+ * 重複キー: staffId + reportDate + section + kobanCode + detail
  *
  * 既存運用で seq が Date.now() ベースだった頃に発生した二重 append を
  * 後追いで掃除する手動実行ユーティリティ。GAS エディタから直接呼び出す。
@@ -400,9 +400,14 @@ function applyDateColumnFormat_(sheet, sheetName) {
  * 削除前に Logger.log で件数を出力し、戻り値で詳細を返す。
  * LockService で他の保存と直列化する。
  *
- * @returns {{deleted:number, groups:number, message:string}|{error:string}}
+ * 注意: 同日同セクションで同工番・同作業内容を意図的に複数行で記録するケース
+ *   （例: 同じ作業を午前と午後に分けて入力）も重複と判定され除去される。
+ *   不安な場合は dryRun=true で削除対象を Logger 出力で確認してから本実行する。
+ *
+ * @param {boolean} [dryRun=false] - true のとき削除せず Logger.log にリスト表示のみ
+ * @returns {{deleted:number, groups:number, message:string, candidates?:Array}|{error:string}}
  */
-function dedupeDailyReports() {
+function dedupeDailyReports(dryRun) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
@@ -426,13 +431,14 @@ function dedupeDailyReports() {
       return obj;
     });
 
-    // staffId + reportDate + section + detail でグルーピング
+    // staffId + reportDate + section + kobanCode + detail でグルーピング
     const groups = {};
     rows.forEach(function (r) {
       const key = [
         String(r.staffId || ''),
         toYMD_(r.reportDate),
         String(r.section || ''),
+        String(r.kobanCode || '').trim(),
         String(r.detail || '').trim()
       ].join('|');
       if (!groups[key]) groups[key] = [];
@@ -440,6 +446,7 @@ function dedupeDailyReports() {
     });
 
     const toDelete = []; // _rowIndex の配列
+    const candidates = []; // dryRun 時の確認用
     let groupCount = 0;
     Object.keys(groups).forEach(function (key) {
       const grp = groups[key];
@@ -451,11 +458,25 @@ function dedupeDailyReports() {
         return ub.localeCompare(ua);
       });
       // 残す: grp[0]、削除: grp[1..]
+      candidates.push({
+        key: key,
+        keepRow: grp[0]._rowIndex,
+        deleteRows: grp.slice(1).map(function (r) { return r._rowIndex; })
+      });
       for (let i = 1; i < grp.length; i++) {
         toDelete.push(grp[i]._rowIndex);
       }
       groupCount++;
     });
+
+    if (dryRun) {
+      const dryMsg = '[DRY RUN] 重複候補: ' + groupCount + 'グループ / 削除予定行数: ' + toDelete.length;
+      Logger.log(dryMsg);
+      candidates.forEach(function (c) {
+        Logger.log('  ' + c.key + ' → keep:' + c.keepRow + ' delete:' + c.deleteRows.join(','));
+      });
+      return { deleted: 0, groups: groupCount, message: dryMsg, candidates: candidates };
+    }
 
     // 大きい行から削除（インデックスズレ防止）
     toDelete.sort(function (a, b) { return b - a; });
