@@ -183,7 +183,6 @@
 
       buildGanttDays();
       renderPageHeader();
-      renderGanttLegend();
       GanttView.render();
       GanttView.renderBars();
 
@@ -339,15 +338,9 @@
     if (el) el.textContent = label;
   }
 
-  function renderGanttLegend() {
-    var legend = document.getElementById('gantt-legend');
-    if (!legend) return;
-    var html = Store.kobanList.slice(0, 7).map(function (k, i) {
-      var barClass = Store.BAR_COLORS[i % Store.BAR_COLORS.length];
-      return '<span class="flex items-center gap-1.5"><span class="swatch ' + barClass + '"></span>' + esc(k['工番']) + '</span>';
-    }).join('');
-    legend.innerHTML = html;
-  }
+  // 凡例（kobanList の上位 N 件を色見本表示）はマイナス思考で削除済み。
+  // 工番選択時の swatch 色は各バー / 各日報行のカラーバーで個別に示すので
+  // ヘッダ近くの集約表示は冗長だった。renderGanttLegend は撤去。
 
   // ════════════════════════════════════════════════════════════════
   // F. GanttView
