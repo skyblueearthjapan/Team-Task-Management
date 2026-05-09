@@ -449,6 +449,7 @@ function getDailyReportsByDate(reportDate) {
 
 /**
  * active なスタッフ一覧を displayOrder 昇順で返す。
+ * role='external' を含む全員を返す（メール宛先構築側で全員必要なため）。
  *
  * @returns {Object[]}
  */
@@ -456,6 +457,18 @@ function getActiveStaff() {
   return listAll(SHEET_NAMES.STAFF)
     .filter(r => r.active === true || r.active === 'TRUE')
     .sort((a, b) => Number(a.displayOrder) - Number(b.displayOrder));
+}
+
+/**
+ * UI に表示するスタッフ一覧を返す（送信専用の external ロールを除く）。
+ * ガント・日報カード・AI モード等のスタッフ選択リストに使用する。
+ *
+ * @returns {Object[]} role が 'external' でないアクティブスタッフ
+ */
+function getUiStaff() {
+  return getActiveStaff().filter(function (s) {
+    return String(s.role || '').toLowerCase() !== 'external';
+  });
 }
 
 // ── WorkTypes ─────────────────────────────────────────────────

@@ -66,6 +66,11 @@
     modal.addEventListener('keydown', modal._trapHandler);
   }
 
+  /** role='external' を除外する UI 用スタッフ判定 */
+  function isUiStaff(s) {
+    return String(s.role || '').toLowerCase() !== 'external';
+  }
+
   /** LocalStorage バックアップ */
   function lsSave(key, val) {
     try { localStorage.setItem('ttm_' + key, JSON.stringify(val)); } catch (_) {}
@@ -205,7 +210,7 @@
             return rmap;
           })
           .catch(function () {
-            return Promise.all(staff.map(function (s) {
+            return Promise.all(staff.filter(isUiStaff).map(function (s) {
               return gasPromise('getDailyReports', s.id, today)
                 .then(function (rows) { return { staffId: s.id, rows: rows || [] }; })
                 .catch(function () { return { staffId: s.id, rows: [] }; });
@@ -215,7 +220,7 @@
               return rmap;
             });
           }),
-        Promise.all(staff.map(function (s) {
+        Promise.all(staff.filter(isUiStaff).map(function (s) {
           return gasPromise('getLatestMailRequestFor', s.id, today)
             .then(function (mq) { return { staffId: s.id, mq: mq || null }; })
             .catch(function () { return { staffId: s.id, mq: null }; });
@@ -256,7 +261,7 @@
         return rmap;
       })
       .catch(function () {
-        return Promise.all(Store.staff.map(function (s) {
+        return Promise.all(Store.staff.filter(isUiStaff).map(function (s) {
           return gasPromise('getDailyReports', s.id, date)
             .then(function (rows) { return { staffId: s.id, rows: rows || [] }; })
             .catch(function () { return { staffId: s.id, rows: [] }; });
@@ -268,7 +273,7 @@
       })
       .then(function (rmap) {
         Store.reports = rmap;
-        return Promise.all(Store.staff.map(function (s) {
+        return Promise.all(Store.staff.filter(isUiStaff).map(function (s) {
           return gasPromise('getLatestMailRequestFor', s.id, date)
             .then(function (mq) { return { staffId: s.id, mq: mq || null }; })
             .catch(function () { return { staffId: s.id, mq: null }; });
@@ -364,7 +369,7 @@
       var grid = document.getElementById('gantt-days-grid');
       if (!grid) return;
 
-      var staffCount = Store.staff.length;
+      var staffCount = Store.staff.filter(isUiStaff).length;
       grid.style.gridTemplateColumns = 'repeat(' + n + ', ' + dw + 'px)';
       // Issue 9: 行高を auto にして lane を動的に増やせるよう grid-template-rows を除去
       grid.style.gridTemplateRows    = '32px 32px repeat(' + Math.max(staffCount, 1) + ', auto)';
@@ -418,7 +423,7 @@
       var days = Store.ganttDays;
       var n    = days.length;
 
-      Store.staff.forEach(function (s, rowIdx) {
+      Store.staff.filter(isUiStaff).forEach(function (s, rowIdx) {
         var gridRow = rowIdx + 3;
         var rowDiv = document.createElement('div');
         // Issue 9: min-height:56px で最低高さを保証しつつ auto で伸縮
@@ -462,9 +467,9 @@
         staffCol.appendChild(h);
       }
 
-      Store.staff.forEach(function (s, i) {
+      Store.staff.filter(isUiStaff).forEach(function (s, i) {
         var avClass = 'av-' + ((i % 7) + 1);
-        var isLast  = (i === Store.staff.length - 1);
+        var isLast  = (i === Store.staff.filter(isUiStaff).length - 1);
         var cell = document.createElement('div');
         cell.className = 'staff-cell';
         // Issue 9: スタッフ列行高も min-height:56px + auto で伸縮
@@ -496,8 +501,9 @@
       // laneMap[staffIdx][dateStr] = 使用済み lane 番号配列
       var laneMap = {};
 
+      var uiStaff = Store.staff.filter(isUiStaff);
       Store.schedules.forEach(function (sch) {
-        var staffIdx = Store.staff.findIndex(function (s) { return s.id === sch.staffId; });
+        var staffIdx = uiStaff.findIndex(function (s) { return s.id === sch.staffId; });
         if (staffIdx < 0) return;
 
         var startIdx = dayIndex(sch.startDate);
@@ -1031,12 +1037,12 @@
     render: function () {
       var grid = document.getElementById('report-cards-grid');
       if (!grid) return;
-      // Issue 2: 全員縦スタック（1列）で描画
-      grid.innerHTML = Store.staff.map(function (s, i) {
+      // Issue 2: 全員縦スタック（1列）で描画（external ロールは非表示）
+      grid.innerHTML = Store.staff.filter(isUiStaff).map(function (s, i) {
         return ReportView._buildCard(s, i);
       }).join('');
 
-      Store.staff.forEach(function (s) {
+      Store.staff.filter(isUiStaff).forEach(function (s) {
         ReportView._attachCardHandlers(s);
       });
 
@@ -2317,10 +2323,10 @@
       var modal = document.getElementById('ai-mode-modal');
       if (!modal) return;
 
-      // スタッフ選択肢を populate
+      // スタッフ選択肢を populate（external ロールは除外）
       var staffSel = document.getElementById('ai-mode-staff');
       if (staffSel) {
-        staffSel.innerHTML = Store.staff.map(function (s) {
+        staffSel.innerHTML = Store.staff.filter(isUiStaff).map(function (s) {
           return '<option value="' + escAttr(s.id) + '">' + esc(s.name) + '</option>';
         }).join('');
       }

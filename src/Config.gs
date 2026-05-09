@@ -99,7 +99,10 @@ const SHEET_SCHEMA = {
     'id',
     'name',
     'email',
-    'role',              // staff / admin
+    'role',              // staff / admin / external
+                         //   staff    : 通常スタッフ（UI 表示・メール宛先・送信元になりうる）
+                         //   admin    : 管理者（同上 + 死活通知受信等の管理権限）
+                         //   external : 送信専用メンバー（UI 非表示・メール宛先のみに含まれる）
     'displayOrder',
     'active',            // TRUE/FALSE
     'signatureName',     // メール署名用フルネーム（空なら name にフォールバック）
