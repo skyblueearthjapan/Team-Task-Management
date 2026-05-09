@@ -62,15 +62,17 @@ function enqueueMailRequest(params) {
     return { success: false, reason: 'EMAIL_NOT_SET' };
   }
 
-  // toAddresses をカンマ区切り string に正規化
-  const baseAddrs = Array.isArray(params.toAddresses)
-    ? params.toAddresses.filter(Boolean)
-    : (params.toAddresses ? String(params.toAddresses).split(',').map(s => s.trim()).filter(Boolean) : []);
+  // toAddresses をカンマ区切り string に正規化（クォート / 全角空白 / 改行を除去）
+  const baseAddrs = (Array.isArray(params.toAddresses)
+    ? params.toAddresses
+    : (params.toAddresses ? String(params.toAddresses).split(',') : []))
+    .map(sanitizeEmail_).filter(Boolean);
 
   // extraRecipients を正規化してマージ（重複排除）
-  const extraAddrs = Array.isArray(params.extraRecipients)
-    ? params.extraRecipients.filter(Boolean)
-    : (params.extraRecipients ? String(params.extraRecipients).split(',').map(s => s.trim()).filter(Boolean) : []);
+  const extraAddrs = (Array.isArray(params.extraRecipients)
+    ? params.extraRecipients
+    : (params.extraRecipients ? String(params.extraRecipients).split(',') : []))
+    .map(sanitizeEmail_).filter(Boolean);
 
   const toAddrSet = {};
   baseAddrs.forEach(function(a) { toAddrSet[a] = true; });
@@ -87,7 +89,7 @@ function enqueueMailRequest(params) {
   // 署名情報を Staff マスタからフォールバック付きで設定
   bodyVarsObj.signatureCompany = '株式会社ラインワークス';
   bodyVarsObj.signatureName    = (staff.signatureName  || staff.name  || '');
-  bodyVarsObj.signatureEmail   = (staff.signatureEmail || staff.email || '');
+  bodyVarsObj.signatureEmail   = sanitizeEmail_(staff.signatureEmail || staff.email || '');
   bodyVarsObj.staffName        = bodyVarsObj.staffName || staff.name || '';
 
   // メール本文を GAS 側で構築（todayItems / prevItems / yesterdayItems がある場合）
@@ -100,7 +102,7 @@ function enqueueMailRequest(params) {
     requestedBy:       params.requestedBy  || '',
     targetStaffId:     params.targetStaffId,
     targetStaffName:   staff.name          || '',   // ★スナップショット
-    targetStaffEmail:  staff.email         || '',   // ★スナップショット
+    targetStaffEmail:  sanitizeEmail_(staff.email),  // ★スナップショット（クォート除去済み）
     reportDate:        params.reportDate   || '',
     mode:              mode,
     toAddresses:       toAddrCsv,                   // ★カンマ区切り string
@@ -665,5 +667,27 @@ function recoverStalePicked() {
 function verifyEmailMatch_(targetStaffId, targetEmail) {
   const staff = getById(SHEET_NAMES.STAFF, targetStaffId);
   if (!staff) return false;
-  return String(staff.email || '').trim() === String(targetEmail || '').trim();
+  return sanitizeEmail_(staff.email) === sanitizeEmail_(targetEmail);
+}
+
+/**
+ * メールアドレスを SMTP で受け付けられる形に正規化する。
+ *
+ * Staff シートに `'sasou@lineworks.co.jp'` のように両端をシングルクォートで囲って
+ * 入力されたケースで、Sheets が先頭の `'` だけテキスト強制マーカーとして剥がし、
+ * 末尾の `'` をそのまま残してしまう。結果 SMTP 側で
+ *   `501 5.1.3 Bad recipient address syntax`
+ * となるため、明示的に剥がす。
+ *
+ * 除去対象: 前後の空白（半角・全角）、シングル/ダブル/バッククォート、< >、改行・タブ
+ *
+ * @param {string} s
+ * @returns {string} 正規化済みメールアドレス（不正値なら空文字）
+ */
+function sanitizeEmail_(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/[\s　\r\n\t]+/g, '')        // 全角含む空白・改行・タブ全消去
+    .replace(/^[<'"`]+/, '')                  // 先頭のクォート / < を剥がす
+    .replace(/[>'"`]+$/, '');                 // 末尾のクォート / > を剥がす
 }
