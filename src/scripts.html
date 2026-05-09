@@ -839,6 +839,10 @@
         var savedOrigStart = origStartDate;
         var savedOrigEnd   = origEndDate;
         google.script.run
+          .withSuccessHandler(function () {
+            // Feature 2: ガント移動完了 → 連動 DailyReport の reportDate / duration を同期
+            _syncReportFromSchedule(sch);
+          })
           .withFailureHandler(function (err) {
             toast('移動の保存に失敗しました: ' + String(err.message || err), 'err');
             sch.startDate = savedOrigStart;
@@ -905,6 +909,10 @@
         GanttView.renderBars();
 
         google.script.run
+          .withSuccessHandler(function () {
+            // Feature 2: リサイズ完了 → 連動 DailyReport の reportDate / duration を同期
+            _syncReportFromSchedule(sch);
+          })
           .withFailureHandler(function (err) {
             toast('リサイズの保存に失敗: ' + String(err.message || err), 'err');
             sch.startDate = origStartDate;
@@ -1018,8 +1026,13 @@
         GanttView.renderBars();
         this.close();
 
+        var schForSync = existing || { id: id, startDate: record.startDate, endDate: record.endDate };
         google.script.run
-          .withSuccessHandler(function () { toast('スケジュールを更新しました', 'ok'); })
+          .withSuccessHandler(function () {
+            toast('スケジュールを更新しました', 'ok');
+            // Feature 2: 編集モーダルからの更新でも連動 DailyReport を同期
+            _syncReportFromSchedule(schForSync);
+          })
           .withFailureHandler(function (err) { toast('更新失敗: ' + String(err.message || err), 'err'); })
           .updateSchedule(id, record);
       } else {
@@ -1159,6 +1172,82 @@
     return 1;
   }
 
+  /**
+   * Feature 2: 2日付間の差（包含なし）を返す。包含日数は +1 する。
+   * @param {string} startStr - YYYY-MM-DD
+   * @param {string} endStr   - YYYY-MM-DD
+   * @returns {number}
+   */
+  function _daysBetween(startStr, endStr) {
+    var s = parseDate(startStr);
+    var e = parseDate(endStr);
+    if (!s || !e) return 0;
+    return Math.round((e.getTime() - s.getTime()) / (24 * 3600 * 1000));
+  }
+
+  /**
+   * Feature 2: ガント側の startDate / endDate が変わったとき、linkedScheduleId で
+   * 紐付いた DailyReport の reportDate / duration を同期する。section は
+   * 新しい reportDate に応じて再判定（今日 / 前日 / それ以外は維持）。
+   * 変更があった行だけ upsertDailyReport を 1 回ずつ呼んでサーバへ反映する。
+   *
+   * @param {{id:string, startDate:string, endDate:string}} schedule
+   */
+  function _syncReportFromSchedule(schedule) {
+    if (!schedule || !schedule.id) return;
+    var newReportDate = toYMD(schedule.startDate);
+    var newDays = _daysBetween(schedule.startDate, schedule.endDate) + 1; // 包含
+    if (newDays < 1) newDays = 1;
+    var newDurationStr = String(newDays) + '日';
+    var changedAny = false;
+
+    Object.keys(Store.reports || {}).forEach(function (staffId) {
+      (Store.reports[staffId] || []).forEach(function (r) {
+        if (String(r.linkedScheduleId || '') !== String(schedule.id)) return;
+        var oldReportDate = r.reportDate ? toYMD(r.reportDate) : '';
+        var oldDuration   = parseDurationDays(r.duration);
+
+        if (oldReportDate === newReportDate && oldDuration === newDays) return;
+
+        // 失敗時のロールバック用スナップショット
+        var snapshot = {
+          reportDate:  r.reportDate,
+          periodStart: r.periodStart,
+          periodEnd:   r.periodEnd,
+          duration:    r.duration,
+          section:     r.section
+        };
+
+        r.reportDate  = newReportDate;
+        r.periodStart = newReportDate;
+        r.periodEnd   = toYMD(schedule.endDate);
+        r.duration    = newDurationStr;
+        // 新しい reportDate に応じて section を再判定（フィルタ自体は reportDate 主体だが、
+        // 並び替え／後方互換のため整合させる）
+        if (newReportDate === Store.today) {
+          r.section = 'today';
+        } else if (Store.prevWorkingDate && newReportDate === Store.prevWorkingDate) {
+          r.section = 'prev';
+        } // それ以外は section を変更しない
+
+        changedAny = true;
+
+        google.script.run
+          .withSuccessHandler(function () {})
+          .withFailureHandler(function (err) {
+            toast('日報同期に失敗しました: ' + String(err.message || err), 'warn');
+            Object.assign(r, snapshot);
+            if (typeof ReportView !== 'undefined' && ReportView.render) ReportView.render();
+          })
+          .upsertDailyReport(r);
+      });
+    });
+
+    if (changedAny && typeof ReportView !== 'undefined' && ReportView.render) {
+      ReportView.render();
+    }
+  }
+
   var ReportView = {
     render: function () {
       var grid = document.getElementById('report-cards-grid');
@@ -1223,9 +1312,26 @@
       var initial  = s.name ? s.name.charAt(0) : '?';
       var reports  = Store.reports[s.id] || [];
       var today    = Store.today;
+      var prevDate = Store.prevWorkingDate || '';
 
-      var todayReps = reports.filter(function (r) { return r.reportDate === today && r.section === 'today'; });
-      var prevReps  = reports.filter(function (r) { return r.section === 'prev' || r.section === 'yesterday'; });
+      // Feature 1: reportDate ベースに変更（日付ロールオーバーで「消える」現象の解消）
+      // section は legacy / 並び替え用として残すが、フィルタは reportDate を主体にする。
+      // reportDate が無い旧データは section にフォールバック。
+      var todayReps = reports.filter(function (r) {
+        var rd = r.reportDate ? toYMD(r.reportDate) : '';
+        if (rd) return rd === today;
+        return r.section === 'today';
+      });
+      var prevReps  = reports.filter(function (r) {
+        var rd = r.reportDate ? toYMD(r.reportDate) : '';
+        if (rd) {
+          if (prevDate && rd === prevDate) return true;
+          // prevDate が未設定の環境では今日以外を前日扱い（legacy 互換）
+          if (!prevDate && rd !== today) return true;
+          return false;
+        }
+        return r.section === 'prev' || r.section === 'yesterday';
+      });
 
       var mq = (Store.mailLatest && Store.mailLatest[s.id]) || null;
       var mailStatus = 'idle';
@@ -1469,16 +1575,15 @@
       });
     },
 
-    // Issue 6: 行削除（section='prev' または 'today'）
+    // Issue 6: 行削除（section パラメータは UI 由来のヒントとしてのみ使用）
     _deleteRow: function (staffId, seq, section) {
       if (!Store.reports[staffId]) return;
 
-      // 1. 削除対象の行を先に特定（linkedScheduleId 取得のため）
+      // 1. 削除対象の行を先に特定（seq は UUID で一意なのでこれだけで決定）
       var target = Store.reports[staffId].find(function (r) {
-        if (String(r.seq) !== String(seq)) return false;
-        if (section === 'today') return r.section === 'today';
-        return r.section === 'prev' || r.section === 'yesterday';
+        return String(r.seq) === String(seq);
       });
+      if (!target) return;
 
       // 2. ローカル Store から該当行を除外
       Store.reports[staffId] = Store.reports[staffId].filter(function (r) {
@@ -1486,12 +1591,15 @@
       });
       ReportView.render();
 
-      // 3. 業務報告のサーバ削除
+      // 3. 業務報告のサーバ削除（target の reportDate / section を渡す。Store.today だと
+      //   ガントドラッグで日付が移った行や前日カードの行を削除できなかった）
+      var srvDate    = target.reportDate || Store.today;
+      var srvSection = target.section || section || 'today';
       google.script.run
         .withFailureHandler(function (err) {
           toast('行削除のサーバ反映に失敗しました: ' + String(err.message || err), 'err');
         })
-        .deleteDailyReportBySeq(staffId, Store.today, section, seq);
+        .deleteDailyReportBySeq(staffId, srvDate, srvSection, seq);
 
       // 4. linkedScheduleId があればガント側も削除（連動）
       if (target && target.linkedScheduleId) {
@@ -1544,14 +1652,12 @@
     // 前日行を本日へコピー（元行は残す）
     _copyToToday: function (staffId, seq) {
       var reports = Store.reports[staffId] || [];
-      // FIX: seq は UUID 文字列のため文字列比較で照合する
-      var src = reports.find(function (r) {
-        return String(r.seq) === String(seq) && (r.section === 'prev' || r.section === 'yesterday');
-      });
+      // seq は UUID 文字列で一意なので seq だけで対象行を決定
+      var src = reports.find(function (r) { return String(r.seq) === String(seq); });
       if (!src) return;
-      // 同 staffId / today / 同じ koban + detail で重複チェック
+      // 「本日カード」と同等の条件（reportDate === Store.today）で重複チェック
       var dup = reports.find(function (r) {
-        return r.section === 'today'
+        return toYMD(r.reportDate) === Store.today
           && r.kobanCode === src.kobanCode
           && (r.detail || '') === (src.detail || '');
       });
@@ -2084,10 +2190,24 @@
 
       var reports = Store.reports[staff.id] || [];
       var today   = Store.today;
+      var prevDate = Store.prevWorkingDate || '';
       var rdSlash = String(today).replace(/-/g, '/');
 
-      var todayReps = reports.filter(function (r) { return r.reportDate === today && r.section === 'today'; });
-      var prevReps  = reports.filter(function (r) { return r.section === 'prev' || r.section === 'yesterday'; });
+      // Feature 1: reportDate ベースに変更
+      var todayReps = reports.filter(function (r) {
+        var rd = r.reportDate ? toYMD(r.reportDate) : '';
+        if (rd) return rd === today;
+        return r.section === 'today';
+      });
+      var prevReps  = reports.filter(function (r) {
+        var rd = r.reportDate ? toYMD(r.reportDate) : '';
+        if (rd) {
+          if (prevDate && rd === prevDate) return true;
+          if (!prevDate && rd !== today) return true;
+          return false;
+        }
+        return r.section === 'prev' || r.section === 'yesterday';
+      });
 
       var bodyVars = {
         staffName:      staff.name || '',
@@ -2167,8 +2287,22 @@
           .retryMailItem(this._originalMailId);
       } else {
         var reports = Store.reports[staff.id] || [];
-        var todayReps = reports.filter(function (r) { return r.reportDate === Store.today && r.section === 'today'; });
-        var prevReps  = reports.filter(function (r) { return r.section === 'prev' || r.section === 'yesterday'; });
+        var prevDateMS = Store.prevWorkingDate || '';
+        // Feature 1: reportDate ベースに変更
+        var todayReps = reports.filter(function (r) {
+          var rd = r.reportDate ? toYMD(r.reportDate) : '';
+          if (rd) return rd === Store.today;
+          return r.section === 'today';
+        });
+        var prevReps  = reports.filter(function (r) {
+          var rd = r.reportDate ? toYMD(r.reportDate) : '';
+          if (rd) {
+            if (prevDateMS && rd === prevDateMS) return true;
+            if (!prevDateMS && rd !== Store.today) return true;
+            return false;
+          }
+          return r.section === 'prev' || r.section === 'yesterday';
+        });
 
         // 挨拶は GAS 側 buildMailBody で「関係各位」固定のためフロントからは送らない（マイナス思考: 削除）
         // Issue 12: signatureName / signatureEmail フォールバック

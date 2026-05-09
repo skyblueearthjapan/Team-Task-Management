@@ -452,10 +452,14 @@ function upsertDailyReport(record) {
       seqStr = Utilities.getUuid();
       record.seq = seqStr;
     }
-    const existing = getDailyReports(record.staffId, record.reportDate)
-      .find(r => String(r.seq) === seqStr && r.section === record.section);
+    // CRITICAL FIX: reportDate / section が変更されたケース（ガントドラッグで日付移動など）でも
+    // 既存行を見つけるため、seq + staffId のみで全行探索する。seq は UUID なのでグローバルに一意。
+    // 旧実装は getDailyReports(reportDate) で reportDate プリフィルタしていたため、
+    // 新 reportDate で探すと旧 reportDate の行が見つからず append → 行が増殖していた。
+    const existing = listAll(SHEET_NAMES.DAILY_REPORTS).find(function (r) {
+      return String(r.staffId) === String(record.staffId) && String(r.seq) === seqStr;
+    });
     if (existing) {
-      // 検索キー（staffId/reportDate/section/seq）も updates に含まれるが値不変のため問題なし
       // id だけは既存行の id を保護するため除外
       const updates = {};
       Object.keys(record).forEach(function(k) {
