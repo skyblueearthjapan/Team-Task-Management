@@ -564,11 +564,6 @@
 
         DragMove.attach(bar, sch);
 
-        bar.addEventListener('dblclick', function (e) {
-          e.stopPropagation();
-          GanttEditModal.open(sch);
-        });
-
         var lh = document.createElement('div');
         lh.className = 'resize-handle left';
         lh.addEventListener('mousedown', function (e) { DragResize.start(e, bar, sch, 'left'); });
@@ -670,25 +665,44 @@
     attach: function (bar, sch) {
       var startX = 0, origLeft = 0;
       var dragging = false;
+      var hasMoved = false;
       var origStartDate = '', origEndDate = '';
 
       function onMove(e) {
-        if (!dragging) return;
         var delta = e.clientX - startX;
+        // 5px 超えたらドラッグ開始とみなす
+        if (!hasMoved && Math.abs(delta) < 5) return;
+        if (!hasMoved) {
+          hasMoved = true;
+          dragging = true;
+          bar.style.opacity = '0.8';
+        }
         bar.style.left = (origLeft + delta) + 'px';
       }
 
       function onUp(e) {
-        if (!dragging) return;
-        dragging = false;
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
         bar.style.opacity = '';
         bar.style.zIndex  = '';
 
+        if (!hasMoved) {
+          // ドラッグなし = クリックとみなしてモーダルを開く
+          dragging = false;
+          hasMoved = false;
+          GanttEditModal.open(sch);
+          return;
+        }
+
+        dragging = false;
+        hasMoved = false;
+
         var newLeft = parseInt(bar.style.left);
         var colDelta = Math.round((newLeft - origLeft) / GanttView.dayWidth);
-        if (colDelta === 0) return;
+        if (colDelta === 0) {
+          GanttView.renderBars();
+          return;
+        }
 
         var startD = parseDate(sch.startDate);
         var endD   = parseDate(sch.endDate);
@@ -717,12 +731,13 @@
         if (e.target.classList.contains('resize-handle')) return;
         if (e.button !== 0) return;
         e.preventDefault();
-        dragging = true;
+        e.stopPropagation();
+        hasMoved = false;
+        dragging = false;
         startX        = e.clientX;
         origLeft      = parseInt(bar.style.left);
         origStartDate = sch.startDate;
         origEndDate   = sch.endDate;
-        bar.style.opacity = '0.8';
         bar.style.zIndex  = '20';
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
@@ -893,6 +908,13 @@
 
         Store.schedules.push(record);
         GanttView.renderBars();
+
+        // 今日を含む場合はローカルで即時日報追加（サーバー応答を待たない）
+        var today = Store.today;
+        if (record.startDate <= today && record.endDate >= today) {
+          ReportView.autoAddReportRow(record.staffId, newId, record);
+        }
+
         this.close();
 
         google.script.run
@@ -901,19 +923,27 @@
             if (serverId && serverId !== newId) {
               var existing2 = Store.schedules.find(function (s) { return s.id === newId; });
               if (existing2) existing2.id = serverId;
+              // 日報の linkedScheduleId も更新
+              Object.keys(Store.reports || {}).forEach(function (sid) {
+                (Store.reports[sid] || []).forEach(function (r) {
+                  if (r.linkedScheduleId === newId) r.linkedScheduleId = serverId;
+                });
+              });
             }
             GanttView.renderBars();
             toast('スケジュールを追加しました', 'ok');
-            var today = Store.today;
-            var finalId = (serverId && serverId !== newId) ? serverId : newId;
-            if (record.startDate <= today && record.endDate >= today) {
-              ReportView.autoAddReportRow(record.staffId, finalId, record);
-            }
           })
           .withFailureHandler(function (err) {
             toast('追加失敗: ' + String(err.message || err), 'err');
             Store.schedules = Store.schedules.filter(function (s) { return s.id !== newId; });
+            // 追加した日報行もロールバック
+            Object.keys(Store.reports || {}).forEach(function (sid) {
+              Store.reports[sid] = (Store.reports[sid] || []).filter(function (r) {
+                return r.linkedScheduleId !== newId;
+              });
+            });
             GanttView.renderBars();
+            ReportView.render();
           })
           .createSchedule(record);
       }
