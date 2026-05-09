@@ -281,6 +281,31 @@ function updateRow_(sheetName, id, updates, idColumn) {
  * @param {Date|string|null|undefined} d
  * @returns {string} YYYY-MM-DD 形式、または空文字
  */
+/**
+ * シート行の日付フィールドを YYYY-MM-DD 文字列に正規化して返す。
+ *
+ * Sheets が Date 型として保存しているセルは GAS の JSON シリアライズで UTC ISO 文字列
+ * （例: "2026-05-09T15:00:00.000Z"）になる。クライアント側で `slice(0,10)` で日付抽出すると
+ * JST だと 1 日ズレ → 「リロードしたらデータが消える」現象の根本原因。
+ * サーバ側で出力前にスクリプトのタイムゾーン基準でテキスト化することで根絶する。
+ *
+ * 適用対象: getDailyReports / getDailyReportsByDate / getSchedules
+ * 含まれる日付フィールド: reportDate, startDate, endDate, periodStart, periodEnd
+ *
+ * @param {Object} r - シート行 Object
+ * @returns {Object} - 日付フィールドを YYYY-MM-DD に置換した新しい Object
+ */
+function normalizeDateFields_(r) {
+  var copy = Object.assign({}, r);
+  ['reportDate', 'startDate', 'endDate', 'periodStart', 'periodEnd'].forEach(function (f) {
+    if (copy[f] !== undefined && copy[f] !== null && copy[f] !== '') {
+      var ymd = toYMD_(copy[f]);
+      if (ymd) copy[f] = ymd;
+    }
+  });
+  return copy;
+}
+
 function toYMD_(d) {
   if (d == null || d === '') return '';
   if (d instanceof Date) {
@@ -347,7 +372,7 @@ function getSchedules(startDate, endDate) {
     var rStart = toYMD_(r.startDate);
     if (!rStart || !rEnd) return false;
     return rEnd >= startYmd && rStart <= endYmd;
-  });
+  }).map(normalizeDateFields_);
 }
 
 /**
@@ -422,7 +447,7 @@ function getDailyReports(staffId, reportDate) {
   return listAll(SHEET_NAMES.DAILY_REPORTS).filter(function(r) {
     return String(r.staffId) === String(staffId) &&
            toYMD_(r.reportDate) === targetYmd;
-  });
+  }).map(normalizeDateFields_);
 }
 
 /**
@@ -487,7 +512,7 @@ function getDailyReportsByDate(reportDate) {
   var targetYmd = toYMD_(reportDate);
   return listAll(SHEET_NAMES.DAILY_REPORTS).filter(function(r) {
     return toYMD_(r.reportDate) === targetYmd;
-  });
+  }).map(normalizeDateFields_);
 }
 
 // ── Staff ─────────────────────────────────────────────────────

@@ -26,7 +26,23 @@
   /** 日付を YYYY-MM-DD に変換 */
   function toYMD(d) {
     if (!d) return '';
-    if (typeof d === 'string') return d.slice(0, 10);
+    if (typeof d === 'string') {
+      // ISO 形式（"2026-05-09T15:00:00.000Z" 等）は Date 経由でローカル日付に変換する。
+      // これは Sheets が Date 型として保存しているセルを GAS が JSON シリアライズした結果で、
+      // 単純な slice(0,10) だと UTC 日付になり JST では 1 日ズレる（リロードでデータが
+      // 「消える」ように見える根本原因）。
+      if (d.indexOf('T') >= 0) {
+        var dt = new Date(d);
+        if (!isNaN(dt.getTime())) {
+          var yi = dt.getFullYear();
+          var mi = ('0' + (dt.getMonth() + 1)).slice(-2);
+          var di = ('0' + dt.getDate()).slice(-2);
+          return yi + '-' + mi + '-' + di;
+        }
+      }
+      // YYYY-MM-DD 形式（テキスト保存）はそのまま
+      return d.slice(0, 10);
+    }
     var y = d.getFullYear();
     var m = ('0' + (d.getMonth() + 1)).slice(-2);
     var day = ('0' + d.getDate()).slice(-2);
