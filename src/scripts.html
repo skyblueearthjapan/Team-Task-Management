@@ -276,11 +276,10 @@
       Store.holidayNotes = {};
       Store.calendar.forEach(function (c) {
         if (!c['備考']) return;
-        var rawDate = c['日付'];
-        var key = (rawDate instanceof Date)
-          ? rawDate.toISOString().slice(0, 10)
-          : String(rawDate).slice(0, 10);
-        Store.holidayNotes[key] = c['備考'];
+        // toYMD は ISO 文字列を JST に正規化する。slice(0,10) だと UTC 日付になり
+        // JST 土曜の "出勤日" 備考が金曜の列に貼り付く（カレンダーズレの根本原因）。
+        var key = toYMD(c['日付']);
+        if (key) Store.holidayNotes[key] = c['備考'];
       });
       Store.workTypes   = workTypes;
       Store.schedules   = schedules;
