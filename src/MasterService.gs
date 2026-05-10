@@ -13,7 +13,9 @@
 
 // ─── キャッシュ設定 ─────────────────────────────────────────────
 /** @const {string} */ var CACHE_KEY_KOBAN    = 'master:koban:v1';
-/** @const {string} */ var CACHE_KEY_CALENDAR = 'master:calendar:v1';
+// v2: buildCalendarMapFromRecords_ の ISO 文字列ハンドリング修正に伴いバージョンアップ。
+// 旧 v1 キャッシュには UTC スライスでズレた日付キーが入っているため、新キーで作り直す。
+/** @const {string} */ var CACHE_KEY_CALENDAR = 'master:calendar:v2';
 /** @const {number} */ var CACHE_TTL_SECONDS  = 6 * 60 * 60; // 6 時間
 /** @const {number} */ var CACHE_CHUNK_BYTES  = 90 * 1024;   // 90 KB（100 KB 上限に余裕を持たせる）
 
@@ -77,20 +79,7 @@ function getCompanyCalendar(startDate, endDate) {
   }
 
   return allRecords.filter(function(r) {
-    var rawDate = r['日付'];
-    if (!rawDate) return false;
-
-    // Date オブジェクトの場合は YYYY-MM-DD 文字列に変換
-    var d;
-    if (rawDate instanceof Date) {
-      var y = rawDate.getFullYear();
-      var mo = ('0' + (rawDate.getMonth() + 1)).slice(-2);
-      var day = ('0' + rawDate.getDate()).slice(-2);
-      d = y + '-' + mo + '-' + day;
-    } else {
-      d = String(rawDate);
-    }
-
+    var d = normalizeCalendarDate_(r['日付']);
     if (!d) return false;
     if (startDate && d < startDate) return false;
     if (endDate   && d > endDate)   return false;
@@ -448,16 +437,38 @@ function getCalendarAll_() {
 function buildCalendarMapFromRecords_(records) {
   var map = {};
   records.forEach(function(r) {
-    var dateKey = r['日付'];
-    if (dateKey instanceof Date) {
-      dateKey = Utilities.formatDate(dateKey, 'JST', 'yyyy-MM-dd');
-    } else if (typeof dateKey === 'string') {
-      // ISO 形式が含まれる場合に備えて日付部分のみ抽出
-      dateKey = String(dateKey).slice(0, 10);
-    }
+    var dateKey = normalizeCalendarDate_(r['日付']);
     if (dateKey) map[dateKey] = r['区分'];
   });
   return map;
+}
+
+/**
+ * カレンダーレコードの日付フィールドを JST の YYYY-MM-DD に正規化する。
+ *
+ * Date オブジェクトと、JSON キャッシュ復元で発生する UTC ISO 文字列の両方に対応する。
+ * 単純な slice(0,10) だと UTC 日付が返り JST から 1 日ズレる
+ * （土曜の "出勤土曜" 区分が金曜キーに入る + getPreviousWorkingDay が誤った日を返す根本原因）。
+ *
+ * @private
+ * @param {Date|string|null} raw - 日付値
+ * @returns {string} JST 基準の YYYY-MM-DD（変換不可の場合は空文字）
+ */
+function normalizeCalendarDate_(raw) {
+  if (!raw) return '';
+  if (raw instanceof Date) {
+    return Utilities.formatDate(raw, 'JST', 'yyyy-MM-dd');
+  }
+  if (typeof raw !== 'string') return '';
+  // JSON.stringify(Date) 由来の ISO 文字列は UTC 表記なので Date 経由で JST に再変換する
+  if (raw.indexOf('T') >= 0) {
+    var dt = new Date(raw);
+    if (!isNaN(dt.getTime())) {
+      return Utilities.formatDate(dt, 'JST', 'yyyy-MM-dd');
+    }
+  }
+  // 既に YYYY-MM-DD（テキスト保存）はそのまま先頭 10 文字を返す
+  return raw.slice(0, 10);
 }
 
 /**
