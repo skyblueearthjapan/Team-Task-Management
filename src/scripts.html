@@ -301,27 +301,40 @@
         return;
       }
 
-      return gasPromise('getDailyReportsByDate', today)
-        .then(function (rows) {
+      // 本日分と前営業日分を並列取得して 1 つの map にマージする。
+      // 前日カードは reportDate === prevWorkingDate の行を表示する設計だが、本日分しか
+      // 取得していなかったため、土曜出勤など prevWorkingDate が今日と異なる日に書いた
+      // 日報が画面から消える状態だった。
+      var fetchByDate = function (date) {
+        return gasPromise('getDailyReportsByDate', date).catch(function () { return null; });
+      };
+      var needsPrev = prevDate && prevDate !== today;
+      return Promise.all([
+        fetchByDate(today),
+        needsPrev ? fetchByDate(prevDate) : Promise.resolve([])
+      ])
+        .then(function (results) {
+          var todayRows = results[0];
+          var prevRows  = results[1];
+          // 本日分が取れなかった場合のみ個別取得フォールバック（前日分は失敗しても無視）
+          if (todayRows === null) {
+            toast('日報一括取得失敗。個別取得に切り替えます', 'warn');
+            return Promise.all(staff.filter(isUiStaff).map(function (s) {
+              return gasPromise('getDailyReports', s.id, today)
+                .then(function (rows) { return { staffId: s.id, rows: rows || [] }; })
+                .catch(function () { return { staffId: s.id, rows: [] }; });
+            })).then(function (arr) {
+              var rmap = {};
+              arr.forEach(function (r) { rmap[r.staffId] = r.rows; });
+              return { rmap: rmap, reportsFailed: true };
+            });
+          }
           var rmap = {};
-          (rows || []).forEach(function (r) {
+          (todayRows || []).concat(prevRows || []).forEach(function (r) {
             if (!rmap[r.staffId]) rmap[r.staffId] = [];
             rmap[r.staffId].push(r);
           });
           return { rmap: rmap, reportsFailed: false };
-        })
-        .catch(function () {
-          // getDailyReportsByDate 失敗 → 個別取得にフォールバック
-          toast('日報一括取得失敗。個別取得に切り替えます', 'warn');
-          return Promise.all(staff.filter(isUiStaff).map(function (s) {
-            return gasPromise('getDailyReports', s.id, today)
-              .then(function (rows) { return { staffId: s.id, rows: rows || [] }; })
-              .catch(function () { return { staffId: s.id, rows: [] }; });
-          })).then(function (arr) {
-            var rmap = {};
-            arr.forEach(function (r) { rmap[r.staffId] = r.rows; });
-            return { rmap: rmap, reportsFailed: true };
-          });
         })
         .then(function (phase2) {
           Store.reports = phase2.rmap;
