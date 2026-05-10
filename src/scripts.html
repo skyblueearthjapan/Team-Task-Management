@@ -2240,6 +2240,8 @@
       var bodyVars = {
         staffName:      staff.name || '',
         reportDate:     rdSlash,
+        todayDate:      today,
+        prevDate:       prevDate,
         todayItems:     self._buildItems(todayReps),
         yesterdayItems: self._buildItems(prevReps),
         signatureName:  sigName,
@@ -2345,6 +2347,8 @@
         var bodyVars = {
           staffName:      staff.name || '',
           reportDate:     rdSlash,
+          todayDate:      Store.today,
+          prevDate:       prevDateMS,
           todayItems:     this._buildItems(todayReps),
           yesterdayItems: this._buildItems(prevReps),
           signatureName:  sigName,

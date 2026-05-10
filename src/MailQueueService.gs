@@ -168,6 +168,10 @@ function buildMailBody(params) {
   var sigCompany  = params.signatureCompany || '株式会社ラインワークス';
   var sigName     = params.signatureName   || '';
   var sigEmail    = params.signatureEmail  || '';
+  // セクション見出しに日付＋曜日を入れる（土日越え運用での曖昧さ解消）。
+  // todayDate / prevDate が未指定なら従来ラベルにフォールバック。
+  var todayDate   = params.todayDate       || '';
+  var prevDate    = params.prevDate        || '';
 
   var lines = [];
 
@@ -181,7 +185,10 @@ function buildMailBody(params) {
 
   // ▼ 本日の作業内容
   var SECTION_DASH = '　―――――――――――――――――――――――――';  // 全角スペース1 + ― 27個
-  lines.push('▼ 本日の作業内容' + SECTION_DASH);
+  var todayLabel = todayDate
+    ? '▼ ' + formatJaDateLabel_(todayDate) + ' の作業内容'
+    : '▼ 本日の作業内容';
+  lines.push(todayLabel + SECTION_DASH);
   // detail が空のアイテムはスキップ
   var validTodayItems = todayItems.filter(function(item) { return item.detail && String(item.detail).trim() !== ''; });
   if (validTodayItems.length > 0) {
@@ -207,7 +214,10 @@ function buildMailBody(params) {
   }
 
   // ▼ 前日までの作業報告
-  lines.push('▼ 前日までの作業報告' + SECTION_DASH);
+  var prevLabel = prevDate
+    ? '▼ ' + formatJaDateLabel_(prevDate) + ' の作業報告'
+    : '▼ 前日までの作業報告';
+  lines.push(prevLabel + SECTION_DASH);
   // detail が空のアイテムはスキップ
   var validPrevItems = prevItems.filter(function(item) { return item.detail && String(item.detail).trim() !== ''; });
   if (validPrevItems.length > 0) {
@@ -241,6 +251,29 @@ function buildMailBody(params) {
   lines.push('-----------------------------------------------------------');
 
   return lines.join('\n');
+}
+
+/**
+ * YYYY-MM-DD を "M/D (曜)" 形式に変換する（メール本文の見出し用）。
+ * パース不能な値は空文字を返す（呼び出し側で従来ラベルにフォールバックする想定）。
+ *
+ * @private
+ * @param {string} ymd - 'YYYY-MM-DD' 形式の日付文字列
+ * @returns {string} "5/8 (金)" などの表示文字列、または空文字
+ */
+function formatJaDateLabel_(ymd) {
+  if (!ymd) return '';
+  var s = String(ymd).slice(0, 10);
+  var parts = s.split('-');
+  if (parts.length !== 3) return '';
+  var y = parseInt(parts[0], 10);
+  var m = parseInt(parts[1], 10);
+  var d = parseInt(parts[2], 10);
+  if (!y || !m || !d) return '';
+  var dt = new Date(y, m - 1, d);
+  if (isNaN(dt.getTime())) return '';
+  var dow = ['日', '月', '火', '水', '木', '金', '土'][dt.getDay()];
+  return m + '/' + d + ' (' + dow + ')';
 }
 
 /**
